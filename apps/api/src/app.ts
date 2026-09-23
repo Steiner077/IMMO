@@ -52,6 +52,13 @@ export async function buildApp() {
     if (err instanceof AppError) {
       return reply.status(err.statusCode).send({ error: err.code, message: err.message, details: err.details });
     }
+    if (err instanceof Prisma.PrismaClientInitializationError) {
+      req.log.error({ err }, 'Datenbank nicht erreichbar');
+      return reply.status(503).send({ error: 'DATABASE_UNAVAILABLE', message: 'Datenbank nicht erreichbar – bitte prüfen, ob PostgreSQL läuft und DATABASE_URL (Benutzer/Passwort) in apps/api/.env stimmt.' });
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && ['P2021', 'P2022'].includes(err.code)) {
+      return reply.status(503).send({ error: 'DATABASE_NOT_MIGRATED', message: 'Die Datenbank ist noch nicht eingerichtet – bitte "npm run db:deploy" und "npm run db:seed" ausführen.' });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
       if (err.code === 'P2002') return reply.status(409).send({ error: 'CONFLICT', message: 'Eintrag existiert bereits (Eindeutigkeit verletzt).' });
       if (err.code === 'P2025') return reply.status(404).send({ error: 'NOT_FOUND', message: 'Eintrag nicht gefunden.' });
@@ -67,7 +74,15 @@ export async function buildApp() {
     return reply.status(500).send({ error: 'INTERNAL', message: 'Interner Fehler. Der Vorfall wurde protokolliert.', requestId: req.id });
   });
 
-  app.get('/api/health', async () => ({ status: 'ok', time: new Date().toISOString() }));
+  app.get('/api/health', async (_req, reply) => {
+    try {
+      const { prisma } = await import('./lib/prisma.js');
+      await prisma.$queryRaw`SELECT 1`;
+      return { status: 'ok', database: 'ok', time: new Date().toISOString() };
+    } catch (e) {
+      return reply.status(503).send({ status: 'error', database: (e as Error).message.split('\n').filter(Boolean).slice(-1)[0] });
+    }
+  });
 
   await app.register(
     async (api) => {
