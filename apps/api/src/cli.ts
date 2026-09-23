@@ -4,14 +4,19 @@
  * Das Startpasswort wird aus INITIAL_PASSWORD gelesen oder zufällig erzeugt und einmalig ausgegeben.
  */
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 import { hashPassword, passwordPolicyError } from './auth/password.js';
+
+// Lokal: Zugangsdaten aus apps/api/.env lesen (wie der Server)
+if (existsSync('.env') && !process.env.DATABASE_URL) process.loadEnvFile('.env');
 
 const args = process.argv.slice(2);
 const cmd = args[0];
 const opt = (name: string) => {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : undefined;
+  // Windows/npm reicht Anführungszeichen teils mit durch – entfernen
+  return i >= 0 ? args[i + 1]?.replace(/^[\s"'^]+|[\s"'^]+$/g, '').replace(/\^/g, '') : undefined;
 };
 
 async function main() {
