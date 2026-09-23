@@ -16,8 +16,8 @@ export async function automationRoutes(app: FastifyInstance) {
     const [rows, aliases, autoPayments, totalPayments] = await Promise.all([
       prisma.importRow.groupBy({ by: ['status'], where: { batch: { organizationId: orgId }, createdAt: { gte: since } }, _count: true }),
       prisma.payerAlias.count({ where: { organizationId: orgId } }),
-      prisma.paymentAssignment.count({ where: { automatic: true, payment: { organizationId: orgId, createdAt: { gte: since } } } }),
-      prisma.paymentAssignment.count({ where: { payment: { organizationId: orgId, createdAt: { gte: since } } } }),
+      prisma.paymentAssignment.count({ where: { automatic: true, payment: { organizationId: orgId, createdAt: { gte: since }, source: { not: 'MANUAL' } } } }),
+      prisma.paymentAssignment.count({ where: { payment: { organizationId: orgId, createdAt: { gte: since }, source: { not: 'MANUAL' } } } }),
     ]);
     return {
       jobs: JOBS.map((j) => ({ key: j.key, name: j.name, description: j.description, schedule: j.schedule, lastRun: runs.find((r) => r.job === j.key) ?? null })),
