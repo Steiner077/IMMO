@@ -16,6 +16,8 @@ export const orgSettingsSchema = z.object({
   chargesMonthsAhead: z.number().int().min(0).max(12).default(1),
   /** Mieter über offene Mieten informieren */
   notifyTenantsOverdue: z.boolean().default(false),
+  /** KI-Assistent (unten rechts) anzeigen – verursacht Kosten pro Frage */
+  assistantEnabled: z.boolean().default(false),
 });
 export type OrgSettings = z.infer<typeof orgSettingsSchema>;
 

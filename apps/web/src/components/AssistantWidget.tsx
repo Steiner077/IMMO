@@ -50,7 +50,7 @@ export function AssistantWidget() {
   });
   const end = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { data: status } = useQuery({ queryKey: ['ai-status'], queryFn: () => api<{ enabled: boolean }>('/ai/status'), staleTime: 300_000 });
+  const { data: status } = useQuery({ queryKey: ['ai-status'], queryFn: () => api<{ enabled: boolean; assistant: boolean }>('/ai/status'), staleTime: 300_000 });
 
   useEffect(() => {
     try {
@@ -74,7 +74,8 @@ export function AssistantWidget() {
     return () => window.removeEventListener('immo:ask', onAsk);
   }, []);
 
-  if (!can('dashboard:read')) return null;
+  // Nur anzeigen, wenn der Assistent in den Einstellungen eingeschaltet ist
+  if (!can('dashboard:read') || !status?.assistant) return null;
 
   const send = async (text: string) => {
     const q = text.trim();

@@ -34,7 +34,7 @@ export function SettingsPage() {
   );
 }
 
-interface Settings { organization: { name: string; currency: string }; settings: { autoReadyThreshold: number; reviewThreshold: number; overdueGraceDays: number; leaseExpiryNoticeDays: number; autoExcelSnapshot: boolean; chargesMonthsAhead: number; notifyTenantsOverdue: boolean } }
+interface Settings { organization: { name: string; currency: string }; settings: { autoReadyThreshold: number; reviewThreshold: number; overdueGraceDays: number; leaseExpiryNoticeDays: number; autoExcelSnapshot: boolean; chargesMonthsAhead: number; notifyTenantsOverdue: boolean; assistantEnabled: boolean } }
 
 function OrgSettings() {
   const { can } = useAuth();
@@ -46,7 +46,7 @@ function OrgForm({ data, readOnly }: { data: Settings; readOnly: boolean }) {
   const [name, setName] = useState(data.organization.name);
   const [s, setS] = useState(data.settings);
   const num = (k: keyof Settings['settings']) => (e: { target: { value: string } }) => setS({ ...s, [k]: Number(e.target.value) });
-  const save = useAction(() => api('/settings', { method: 'PATCH', body: { name, settings: s } }), { success: 'Einstellungen gespeichert', invalidate: [['settings']] });
+  const save = useAction(() => api('/settings', { method: 'PATCH', body: { name, settings: s } }), { success: 'Einstellungen gespeichert', invalidate: [['settings'], ['ai-status']] });
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <Card title="Organisation">
@@ -64,6 +64,7 @@ function OrgForm({ data, readOnly }: { data: Settings; readOnly: boolean }) {
         <div className="mt-4 space-y-2 text-sm">
           <label className="flex items-center gap-2"><input disabled={readOnly} type="checkbox" checked={s.autoExcelSnapshot} onChange={(e) => setS({ ...s, autoExcelSnapshot: e.target.checked })} /> Nach jeder Verbuchung aktuelle Excel-Auswertung ablegen</label>
           <label className="flex items-center gap-2"><input disabled={readOnly} type="checkbox" checked={s.notifyTenantsOverdue} onChange={(e) => setS({ ...s, notifyTenantsOverdue: e.target.checked })} /> Mieter in der App über offene Mieten informieren</label>
+          <label className="flex items-center gap-2"><input disabled={readOnly} type="checkbox" checked={s.assistantEnabled} onChange={(e) => setS({ ...s, assistantEnabled: e.target.checked })} /> KI-Assistent unten rechts anzeigen <span className="text-xs text-slate-500">(ca. 5–15 Rappen pro Frage)</span></label>
         </div>
         {!readOnly && <div className="mt-5 flex justify-end"><Button loading={save.isPending} onClick={() => save.mutate(undefined)}>Speichern</Button></div>}
       </Card>

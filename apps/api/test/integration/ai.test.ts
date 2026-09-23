@@ -78,6 +78,18 @@ const login = async (email: string, kind = 'admin') => {
 };
 
 describe('KI-Assistent', () => {
+  it('ist standardmässig ausgeschaltet und lässt sich in den Einstellungen einschalten', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    expect((await app.inject({ method: 'GET', url: '/api/v1/ai/status', headers: auth })).json().assistant).toBe(false);
+    const off = await app.inject({ method: 'POST', url: '/api/v1/ai/chat', headers: auth, payload: { messages: [{ role: 'user', content: 'Hallo' }] } });
+    expect(off.statusCode).toBe(403);
+    const owner = await login('eigentuemer@immo.local');
+    const r = await app.inject({ method: 'PATCH', url: '/api/v1/settings', headers: { authorization: `Bearer ${owner}` }, payload: { settings: { assistantEnabled: true } } });
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/v1/ai/status', headers: auth })).json().assistant).toBe(true);
+  });
+
   it('ist aktiv und beantwortet Fragen über Werkzeuge mit Navigation', async () => {
     const t = await login('verwaltung@immo.local');
     expect((await app.inject({ method: 'GET', url: '/api/v1/ai/status', headers: { authorization: `Bearer ${t}` } })).json().enabled).toBe(true);

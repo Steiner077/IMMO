@@ -49,7 +49,8 @@ export function GlobalSearch() {
     enabled: debounced.length >= 2,
   });
 
-  const { data: ai } = useQuery({ queryKey: ['ai-status'], queryFn: () => api<{ enabled: boolean }>('/ai/status'), staleTime: 300_000 });
+  const { data: aiStatus } = useQuery({ queryKey: ['ai-status'], queryFn: () => api<{ assistant: boolean }>('/ai/status'), staleTime: 300_000 });
+  const ai = { enabled: !!aiStatus?.assistant };
   const ask = () => {
     window.dispatchEvent(new CustomEvent('immo:ask', { detail: q.trim() }));
     setOpen(false);

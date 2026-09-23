@@ -6,6 +6,8 @@ import { config } from '../config.js';
 import { parse } from '../lib/http.js';
 import { requirePermission } from '../auth/context.js';
 import { AI_BETAS, ai, aiEnabled, aiError, textOf } from '../services/ai.js';
+import { getOrgSettings } from '../services/settings.js';
+import { forbidden } from '../lib/errors.js';
 
 /**
  * KI-Assistent der Verwaltungs-App.
@@ -74,7 +76,10 @@ function compact(value: unknown, max = 14000): string {
 }
 
 export async function assistantRoutes(app: FastifyInstance) {
-  app.get('/status', async () => ({ enabled: aiEnabled(), model: aiEnabled() ? config.AI_MODEL : null }));
+  app.get('/status', async (req) => {
+    const s = await getOrgSettings(req.user.organizationId);
+    return { enabled: aiEnabled(), assistant: aiEnabled() && s.assistantEnabled, model: aiEnabled() ? config.AI_MODEL : null };
+  });
 
   app.post('/chat', { preHandler: requirePermission('dashboard:read'), config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req) => {
     const body = parse(
@@ -84,6 +89,7 @@ export async function assistantRoutes(app: FastifyInstance) {
       }),
       req.body,
     );
+    if (!(await getOrgSettings(req.user.organizationId)).assistantEnabled) throw forbidden('Der KI-Assistent ist in den Einstellungen ausgeschaltet.');
     const auth = req.headers.authorization!;
     const actions: Action[] = [];
 
