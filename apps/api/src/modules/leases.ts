@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { addMonths, formatMoney, toPeriod } from '@immo/shared';
 import { prisma, financialTx } from '../lib/prisma.js';
@@ -8,6 +8,9 @@ import { assertPropertyAccess, propertyIdFilter, requirePermission } from '../au
 import { auditReq, diff } from '../services/audit.js';
 import { ensureChargesForLease, recalcCharge } from '../services/charges.js';
 import { getOrgSettings } from '../services/settings.js';
+import { readMultipart } from '../lib/upload.js';
+import { storeDocument } from '../services/documents.js';
+import { extractContract, matchContract } from '../services/contract-extraction.js';
 
 const leaseSchema = z.object({
   unitId: z.string(),
@@ -24,6 +27,43 @@ const leaseSchema = z.object({
   paymentReference: optStr,
   notes: optStr,
 });
+
+/** Legt einen Mietvertrag mit allen Prüfungen und Sollstellungen an (manuell oder aus einem ausgelesenen Vertrag). */
+export async function createLease(req: FastifyRequest, body: z.infer<typeof leaseSchema>) {
+  const unit = await prisma.unit.findFirst({ where: { id: body.unitId, property: { organizationId: req.user.organizationId } }, include: { property: true } });
+  if (!unit) throw notFound('Mietobjekt');
+  assertPropertyAccess(req.user, unit.propertyId);
+  const tenant = await prisma.tenant.findFirst({ where: { id: body.tenantId, organizationId: req.user.organizationId } });
+  if (!tenant) throw notFound('Mieter');
+  if (body.endDate && body.endDate < body.startDate) throw badRequest('Das Mietende liegt vor dem Mietbeginn.');
+  // Überschneidende Verträge verhindern
+  const overlap = await prisma.lease.findFirst({
+    where: {
+      unitId: body.unitId,
+      status: { in: ['ACTIVE', 'TERMINATED'] },
+      startDate: body.endDate ? { lte: body.endDate } : undefined,
+      OR: [{ endDate: null }, { endDate: { gte: body.startDate } }],
+    },
+  });
+  if (overlap && body.status === 'ACTIVE') throw conflict('Für dieses Mietobjekt besteht im Zeitraum bereits ein aktiver Mietvertrag.');
+  const settings = await getOrgSettings(req.user.organizationId);
+  // Bestehende (ältere) Verträge: Sollstellungen erst ab dem laufenden Monat, sofern nicht anders angegeben
+  const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+  if (!body.chargesFrom && body.startDate < monthStart) body.chargesFrom = monthStart;
+  const lease = await financialTx(async (tx) => {
+    const l = await tx.lease.create({ data: body });
+    await ensureChargesForLease(tx, l, addMonths(toPeriod(new Date()), settings.chargesMonthsAhead));
+    return l;
+  });
+  await auditReq(req, {
+    action: 'lease.create',
+    entityType: 'Lease',
+    entityId: lease.id,
+    summary: `Mietvertrag ${unit.property.name} / ${unit.label} mit ${tenant.lastName ?? tenant.companyName} (${formatMoney(body.netRentCents + body.utilitiesCents)}/Monat)`,
+    newValues: body,
+  });
+  return lease;
+}
 
 export async function leaseRoutes(app: FastifyInstance) {
   app.get('/leases', { preHandler: requirePermission('lease:read') }, async (req) => {
@@ -48,38 +88,94 @@ export async function leaseRoutes(app: FastifyInstance) {
 
   app.post('/leases', { preHandler: requirePermission('lease:write') }, async (req) => {
     const body = parse(leaseSchema, req.body);
-    const unit = await prisma.unit.findFirst({ where: { id: body.unitId, property: { organizationId: req.user.organizationId } }, include: { property: true } });
-    if (!unit) throw notFound('Mietobjekt');
-    assertPropertyAccess(req.user, unit.propertyId);
-    const tenant = await prisma.tenant.findFirst({ where: { id: body.tenantId, organizationId: req.user.organizationId } });
-    if (!tenant) throw notFound('Mieter');
-    if (body.endDate && body.endDate < body.startDate) throw badRequest('Das Mietende liegt vor dem Mietbeginn.');
-    // Überschneidende Verträge verhindern
-    const overlap = await prisma.lease.findFirst({
-      where: {
-        unitId: body.unitId,
-        status: { in: ['ACTIVE', 'TERMINATED'] },
-        startDate: body.endDate ? { lte: body.endDate } : undefined,
-        OR: [{ endDate: null }, { endDate: { gte: body.startDate } }],
-      },
+    return createLease(req, body);
+  });
+
+  /** Mietvertrag (PDF/Foto) von der KI auslesen lassen – es wird noch nichts gespeichert ausser dem Dokument */
+  app.post('/leases/extract', { preHandler: requirePermission('lease:write', 'tenant:write') }, async (req) => {
+    const { files } = await readMultipart(req);
+    const file = files[0];
+    if (!file) throw badRequest('Keine Datei übermittelt.');
+    const data = await extractContract(file);
+    const match = await matchContract(req.user.organizationId, data);
+    const doc = await storeDocument(prisma, req.user.organizationId, file, {
+      category: 'LEASE',
+      description: 'Mietvertrag (automatisch ausgelesen)',
+      propertyId: match.propertyId,
+      uploadedById: req.user.id,
     });
-    if (overlap && body.status === 'ACTIVE') throw conflict('Für dieses Mietobjekt besteht im Zeitraum bereits ein aktiver Mietvertrag.');
-    const settings = await getOrgSettings(req.user.organizationId);
-    // Bestehende (ältere) Verträge: Sollstellungen erst ab dem laufenden Monat, sofern nicht anders angegeben
-    const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
-    if (!body.chargesFrom && body.startDate < monthStart) body.chargesFrom = monthStart;
-    const lease = await financialTx(async (tx) => {
-      const l = await tx.lease.create({ data: body });
-      await ensureChargesForLease(tx, l, addMonths(toPeriod(new Date()), settings.chargesMonthsAhead));
-      return l;
-    });
-    await auditReq(req, {
-      action: 'lease.create',
-      entityType: 'Lease',
-      entityId: lease.id,
-      summary: `Mietvertrag ${unit.property.name} / ${unit.label} mit ${tenant.lastName ?? tenant.companyName} (${formatMoney(body.netRentCents + body.utilitiesCents)}/Monat)`,
-      newValues: body,
-    });
+    await auditReq(req, { action: 'lease.extract', entityType: 'Document', entityId: doc.id, summary: `Mietvertrag "${file.filename}" per KI ausgelesen (Sicherheit ${data.confidence} %)` });
+    return { documentId: doc.id, data, match };
+  });
+
+  /** Nach Prüfung: Mieter (neu oder bestehend), Mietobjekt (neu oder bestehend) und Vertrag in einem Schritt anlegen */
+  app.post('/leases/from-contract', { preHandler: requirePermission('lease:write', 'tenant:write') }, async (req) => {
+    const body = parse(
+      z.object({
+        documentId: z.string(),
+        tenantId: z.string().nullish(),
+        tenant: z
+          .object({
+            isCompany: z.boolean().default(false),
+            firstName: optStr,
+            lastName: optStr,
+            companyName: optStr,
+            email: z.string().trim().email().nullish().or(z.literal('').transform(() => null)),
+            phone: optStr,
+            street: optStr,
+            zip: optStr,
+            city: optStr,
+            dateOfBirth: z.coerce.date().nullish(),
+            notes: optStr,
+          })
+          .nullish(),
+        unitId: z.string().nullish(),
+        newUnit: z.object({ propertyId: z.string(), label: z.string().trim().min(1), type: z.enum(['APARTMENT', 'HOUSE', 'COMMERCIAL', 'OFFICE', 'PARKING', 'GARAGE', 'STORAGE', 'OTHER']).default('APARTMENT'), floor: optStr, rooms: z.coerce.number().nullish(), areaM2: z.coerce.number().nullish() }).nullish(),
+        lease: leaseSchema.omit({ unitId: true, tenantId: true }),
+      }),
+      req.body,
+    );
+    const doc = await prisma.document.findFirst({ where: { id: body.documentId, organizationId: req.user.organizationId } });
+    if (!doc) throw notFound('Dokument');
+    if (!body.tenantId && !body.tenant) throw badRequest('Bitte einen Mieter wählen oder erfassen.');
+    if (body.tenant && !body.tenant.lastName && !body.tenant.companyName) throw badRequest('Nachname oder Firmenname des Mieters fehlt.');
+    if (!body.unitId && !body.newUnit) throw badRequest('Bitte ein Mietobjekt wählen oder erfassen.');
+
+    // Konflikte vorab prüfen, damit bei einem Fehler keine halbfertigen Datensätze entstehen
+    if (body.unitId && body.lease.status !== 'DRAFT') {
+      const overlap = await prisma.lease.findFirst({
+        where: {
+          unitId: body.unitId,
+          status: { in: ['ACTIVE', 'TERMINATED'] },
+          startDate: body.lease.endDate ? { lte: body.lease.endDate } : undefined,
+          OR: [{ endDate: null }, { endDate: { gte: body.lease.startDate } }],
+          unit: { property: { organizationId: req.user.organizationId } },
+        },
+      });
+      if (overlap) throw conflict('Für dieses Mietobjekt besteht im Zeitraum bereits ein aktiver Mietvertrag. Bitte ein anderes Objekt wählen oder den bestehenden Vertrag zuerst beenden.');
+    }
+    if (body.lease.endDate && body.lease.endDate < body.lease.startDate) throw badRequest('Das Mietende liegt vor dem Mietbeginn.');
+
+    let tenantId = body.tenantId ?? null;
+    if (tenantId) {
+      if (!(await prisma.tenant.findFirst({ where: { id: tenantId, organizationId: req.user.organizationId } }))) throw notFound('Mieter');
+    } else {
+      const t = await prisma.tenant.create({ data: { ...body.tenant!, organizationId: req.user.organizationId } });
+      tenantId = t.id;
+      await auditReq(req, { action: 'tenant.create', entityType: 'Tenant', entityId: t.id, summary: `Mieter ${t.companyName ?? `${t.firstName ?? ''} ${t.lastName}`} aus Mietvertrag angelegt`, newValues: body.tenant });
+    }
+    let unitId = body.unitId ?? null;
+    if (!unitId) {
+      assertPropertyAccess(req.user, body.newUnit!.propertyId);
+      const property = await prisma.property.findFirst({ where: { id: body.newUnit!.propertyId, organizationId: req.user.organizationId } });
+      if (!property) throw notFound('Immobilie');
+      const u = await prisma.unit.create({ data: { ...body.newUnit!, propertyId: property.id } });
+      unitId = u.id;
+      await auditReq(req, { action: 'unit.create', entityType: 'Unit', entityId: u.id, summary: `Mietobjekt ${u.label} in ${property.name} aus Mietvertrag angelegt` });
+    }
+    const lease = await createLease(req, { ...body.lease, unitId, tenantId });
+    const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId } });
+    await prisma.document.update({ where: { id: doc.id }, data: { leaseId: lease.id, tenantId, unitId, propertyId: unit.propertyId, category: 'LEASE', visibleToTenant: true } });
     return lease;
   });
 

@@ -1,4 +1,5 @@
-import { FileSignature, Pencil, Plus, XCircle } from 'lucide-react';
+import { FileSignature, Pencil, Plus, Sparkles, XCircle } from 'lucide-react';
+import { ContractImport } from '@/components/ContractImport';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -17,13 +18,19 @@ export function LeasesPage() {
   const { can } = useAuth();
   const [status, setStatus] = useState('ACTIVE,TERMINATED');
   const [open, setOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const navigate = useNavigate();
   const { data, isLoading } = useQuery({ queryKey: ['leases', status], queryFn: () => api<Lease[]>(`/leases${status ? `?status=${status}` : ''}`) });
   const fin = can('finance:read');
   const total = data?.filter((l) => l.status !== 'ENDED').reduce((s, l) => s + l.netRentCents + l.utilitiesCents, 0) ?? 0;
   return (
     <>
-      <PageHeader title="Mietverträge" subtitle={data ? `${data.length} Verträge${fin ? ` · Soll ${chf(total)} / Monat` : ''}` : undefined} actions={can('lease:write') && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setOpen(true)}>Mietvertrag erfassen</Button>} />
+      <PageHeader title="Mietverträge" subtitle={data ? `${data.length} Verträge${fin ? ` · Soll ${chf(total)} / Monat` : ''}` : undefined} actions={can('lease:write') && (
+        <>
+          <Button variant="secondary" icon={<Sparkles className="h-4 w-4" />} onClick={() => setAiOpen(true)}>Aus Mietvertrag (PDF)</Button>
+          <Button icon={<Plus className="h-4 w-4" />} onClick={() => setOpen(true)}>Mietvertrag erfassen</Button>
+        </>
+      )} />
       <Card bodyClassName="p-0">
         <div className="border-b border-slate-100 p-3">
           <Select className="w-56" value={status} onChange={(e) => setStatus(e.target.value)} options={[{ value: 'ACTIVE,TERMINATED', label: 'Laufende Verträge' }, { value: 'TERMINATED', label: 'Gekündigte' }, { value: 'DRAFT', label: 'Entwürfe' }, { value: 'ENDED', label: 'Beendete' }, { value: '', label: 'Alle' }]} />
@@ -51,6 +58,7 @@ export function LeasesPage() {
         )}
       </Card>
       {open && <LeaseForm onClose={() => setOpen(false)} />}
+      {aiOpen && <ContractImport onClose={() => setAiOpen(false)} />}
     </>
   );
 }

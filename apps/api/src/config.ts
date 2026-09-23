@@ -22,6 +22,9 @@ const schema = z.object({
   LOG_LEVEL: z.string().default('info'),
   // Maximale Anmeldeversuche pro IP und Minute
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),
+  // KI-Funktionen (Mietvertrag auslesen, Assistent). Ohne Schlüssel sind sie deaktiviert.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  AI_MODEL: z.string().default('claude-opus-5'),
 });
 
 const parsed = schema.safeParse(process.env);

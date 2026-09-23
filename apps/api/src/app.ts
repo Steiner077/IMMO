@@ -33,6 +33,7 @@ import { automationRoutes } from './modules/automation.js';
 import { settingsRoutes } from './modules/settings.js';
 import { announcementRoutes } from './modules/announcements.js';
 import { portalRoutes } from './modules/portal.js';
+import { assistantRoutes } from './modules/assistant.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -113,6 +114,7 @@ export async function buildApp() {
         await secured.register(settingsRoutes, { prefix: '/settings' });
         await secured.register(announcementRoutes, { prefix: '/announcements' });
         await secured.register(portalRoutes, { prefix: '/portal' });
+        await secured.register(assistantRoutes, { prefix: '/ai' });
       });
     },
     { prefix: '/api/v1' },

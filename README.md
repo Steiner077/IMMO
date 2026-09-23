@@ -33,6 +33,11 @@ Excel ist **nicht** die Datenbank. Führende Datenquelle ist eine relationale Po
 - Aufgaben, Termine (inkl. iCal-Export), Benachrichtigungszentrale, globale Suche (⌘K)
 - Automatisierungs-Zentrale, Änderungsprotokoll (Audit-Log), Benutzer- und Rollenverwaltung
 
+**KI-Funktionen** (Claude, optional):
+- **Mietvertrag aus PDF/Foto erfassen** (Mietverträge → «Aus Mietvertrag (PDF)»): Die KI liest Mieter, Mietobjekt, Mietbeginn/-ende, Nettomiete, Nebenkosten, Kaution, Kündigungsfrist und wichtige Klauseln aus, ordnet bestehende Immobilien/Wohnungen/Mieter zu und zeigt alles zur Prüfung – angelegt wird erst nach Bestätigung.
+- **KI-Assistent** (unten rechts): beantwortet Fragen mit den echten Daten («Wer hat noch nicht bezahlt?», «Was schuldet Frau Keller?»), erklärt Abläufe und navigiert zur passenden Seite. Er sieht nur, was die Rolle des Benutzers sehen darf, und ändert nie selbst etwas.
+- Einrichtung: in `apps/api/.env` den Schlüssel `ANTHROPIC_API_KEY=…` von https://console.anthropic.com eintragen und neu starten. Standardmodell: Claude Opus 5 (`AI_MODEL`). Ohne Schlüssel funktioniert alles andere unverändert. Hinweis Datenschutz: Vertragsinhalte und Assistenten-Fragen werden zur Verarbeitung an die Anthropic-API übermittelt.
+
 **Mieter-App**: Übersicht mit aktueller Monatsmiete und Status, Zahlungshistorie und offene Zahlungen, Mietvertrag, Dokumente (Download und Upload), Mängel melden mit Kamera/Fotos/Video, Terminwunsch und Verlauf, Nachrichten, Termine, Informationen zur Immobilie, wichtige Mitteilungen.
 
 ## Schnellstart (Entwicklung)

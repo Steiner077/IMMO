@@ -12,6 +12,7 @@ import { api } from '@/lib/api';
 import { initials } from '@/lib/format';
 import { GlobalSearch } from './GlobalSearch';
 import { ChangePasswordModal } from '../ChangePasswordModal';
+import { AssistantWidget } from '../AssistantWidget';
 
 interface NavItem {
   to: string;
@@ -210,6 +211,7 @@ export function AppShell() {
         </main>
       </div>
       <ChangePasswordModal open={mustChangePassword} onClose={clearPasswordFlag} forced />
+      <AssistantWidget />
     </div>
   );
 }
