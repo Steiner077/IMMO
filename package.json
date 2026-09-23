@@ -18,6 +18,7 @@
     "db:migrate": "npm run db:migrate -w @immo/api",
     "db:deploy": "npm run db:deploy -w @immo/api",
     "db:seed": "npm run db:seed -w @immo/api",
+    "owner": "npm run owner -w @immo/api --",
     "test:integration": "npm run test:integration -w @immo/api",
     "sample:files": "npm run sample:pdf -w @immo/api"
   },
