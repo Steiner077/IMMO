@@ -1,0 +1,25 @@
+{
+  "name": "immo-platform",
+  "private": true,
+  "version": "1.0.0",
+  "description": "IMMO – professionelle Immobilienverwaltungs-Plattform (Verwaltung, Mieter-App, Automatisierung)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:api": "npm run dev -w @immo/api",
+    "dev:web": "npm run dev -w @immo/web",
+    "dev:tenant": "npm run dev -w @immo/tenant",
+    "build": "npm run build -w @immo/api && npm run build -w @immo/web && npm run build -w @immo/tenant",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "db:migrate": "npm run db:migrate -w @immo/api",
+    "db:deploy": "npm run db:deploy -w @immo/api",
+    "db:seed": "npm run db:seed -w @immo/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

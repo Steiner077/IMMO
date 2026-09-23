@@ -1,0 +1,12 @@
+Buchungsdatum;Valuta;Buchungstext;Auftraggeber;Mitteilung;Belastung;Gutschrift
+01.09.2026;01.09.2026;Gutschrift;Sandra Meier;Miete September 2026;;1630.00
+02.09.2026;02.09.2026;Gutschrift;M. Arnold;Seestrasse 12, 8002 Zürich Miete;;1500.00
+03.09.2026;03.09.2026;Gutschrift;Peter Müller;Seestrasse 12, 8002 Zürich Mietzins September Wohnung 3A;;1850.00
+03.09.2026;03.09.2026;Gutschrift;Schneider L.;Miete Sept;;1810.00
+04.09.2026;04.09.2026;Zahlung an;EWZ Elektrizitätswerk Zürich;Rechnung 2026-08-4471;420.50;
+04.09.2026;04.09.2026;Gutschrift;Weber Julia;IBAN CH44 3199 9123 0008 8901 2 Wohnung A2;;2110.00
+05.09.2026;05.09.2026;Gutschrift;Bäckerei Sonnenschein GmbH;Mietzins Laden Sept. 2026;;4250.00
+08.09.2026;08.09.2026;Gutschrift;Daniel Frei;Miete September;;1950.00
+10.09.2026;10.09.2026;Gutschrift;Monika Keller;Restbetrag August + September;;2820.00
+12.09.2026;12.09.2026;Gutschrift;Hans Beispiel;Anzahlung Parkplatz;;500.00
+15.09.2026;15.09.2026;Belastung;Gebäudeversicherung Kanton Zürich;Police 88-1120;684.00;

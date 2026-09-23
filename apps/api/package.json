@@ -1,0 +1,51 @@
+{
+  "name": "@immo/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "prisma generate && tsup",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force",
+    "sample:pdf": "tsx scripts/generate-sample-statement.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.0",
+    "@fastify/cors": "^11.0.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/multipart": "^9.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@prisma/client": "^6.19.0",
+    "bcryptjs": "^3.0.0",
+    "csv-parse": "^6.0.0",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "pdfjs-dist": "^4.10.38",
+    "pino": "^9.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@immo/shared": "*",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.0",
+    "@types/pdfkit": "^0.13.0",
+    "pdfkit": "^0.15.0",
+    "pino-pretty": "^13.0.0",
+    "prisma": "^6.19.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.3",
+    "vitest": "^5.0.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

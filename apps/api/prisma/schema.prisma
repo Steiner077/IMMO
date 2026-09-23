@@ -1,0 +1,969 @@
+// IMMO – Datenmodell
+// Alle Geldbeträge werden als Ganzzahl in Rappen (Cents) gespeichert.
+// Jede fachliche Tabelle ist über organizationId mandantenfähig.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  OWNER
+  MANAGER
+  EMPLOYEE
+  CARETAKER
+  TENANT
+  SERVICE_PROVIDER
+}
+
+enum PropertyType {
+  RESIDENTIAL
+  COMMERCIAL
+  MIXED
+  OTHER
+}
+
+enum UnitType {
+  APARTMENT
+  HOUSE
+  COMMERCIAL
+  OFFICE
+  PARKING
+  GARAGE
+  STORAGE
+  OTHER
+}
+
+enum LeaseStatus {
+  DRAFT
+  ACTIVE
+  TERMINATED
+  ENDED
+}
+
+enum ChargeStatus {
+  OPEN
+  PARTIAL
+  PAID
+  OVERPAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentStatus {
+  ASSIGNED
+  PARTIAL
+  OVERPAID
+  UNCLEAR
+  REVIEW
+  REVERSED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  QR_BILL
+  STANDING_ORDER
+  DIRECT_DEBIT
+  CASH
+  OTHER
+}
+
+enum PaymentSource {
+  MANUAL
+  PDF_IMPORT
+  CSV_IMPORT
+  EXCEL_IMPORT
+  BANK_API
+}
+
+enum ImportFileType {
+  PDF
+  CSV
+  XLSX
+}
+
+enum ImportBatchStatus {
+  ANALYZING
+  READY
+  PARTIALLY_POSTED
+  POSTED
+  FAILED
+  DISCARDED
+}
+
+enum ImportRowStatus {
+  READY
+  NEEDS_REVIEW
+  UNMATCHED
+  DUPLICATE
+  IGNORED
+  POSTED
+}
+
+enum DocumentCategory {
+  CONTRACT
+  INSURANCE
+  INVOICE
+  CONSTRUCTION
+  HANDOVER
+  PHOTO
+  VIDEO
+  LEASE
+  TERMINATION
+  CORRESPONDENCE
+  BANK_STATEMENT
+  RECEIPT
+  EXPORT
+  OTHER
+}
+
+enum DamageCategory {
+  HEATING
+  WATER
+  ELECTRICITY
+  WINDOWS_DOORS
+  APPLIANCES
+  BATHROOM
+  KITCHEN
+  EXTERIOR
+  COMMON_AREAS
+  PESTS
+  OTHER
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DamageStatus {
+  NEW
+  ACKNOWLEDGED
+  IN_PROGRESS
+  WAITING
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum ExpenseCategory {
+  REPAIR
+  INSURANCE
+  MORTGAGE
+  CARETAKER
+  ELECTRICITY
+  WATER
+  HEATING
+  CLEANING
+  MANAGEMENT
+  CRAFTSMEN
+  TAXES
+  OTHER
+}
+
+enum AutomationRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// ─────────────────────── Organisation & Benutzer ───────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  currency  String   @default("CHF")
+  /// Einstellungen: Schwellenwerte der Automatisierung, Fälligkeiten usw.
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users            User[]
+  properties       Property[]
+  tenants          Tenant[]
+  payments         Payment[]
+  documents        Document[]
+  damageReports    DamageReport[]
+  conversations    Conversation[]
+  tasks            Task[]
+  appointments     Appointment[]
+  notifications    Notification[]
+  expenses         Expense[]
+  serviceProviders ServiceProvider[]
+  auditLogs        AuditLog[]
+  importBatches    ImportBatch[]
+  payerAliases     PayerAlias[]
+  announcements    Announcement[]
+  automationRuns   AutomationRun[]
+  syncJobs         SyncJob[]
+}
+
+model User {
+  id                String    @id @default(cuid())
+  organizationId    String
+  email             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  phone             String?
+  role              Role
+  isActive          Boolean   @default(true)
+  mustChangePassword Boolean  @default(false)
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  /// Verknüpfung für Mieter-Konten
+  tenantId          String?   @unique
+  /// Verknüpfung für Dienstleister-Konten
+  serviceProviderId String?   @unique
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  tenant          Tenant?          @relation(fields: [tenantId], references: [id])
+  serviceProvider ServiceProvider? @relation(fields: [serviceProviderId], references: [id])
+  propertyAccess  PropertyAccess[]
+  refreshTokens   RefreshToken[]
+  notifications   Notification[]
+  participants    ConversationParticipant[]
+  messages        Message[]
+  assignedTasks   Task[]           @relation("TaskAssignee")
+  createdTasks    Task[]           @relation("TaskCreator")
+  assignedDamages DamageReport[]   @relation("DamageCaretaker")
+  reportedDamages DamageReport[]   @relation("DamageReporter")
+  damageEvents    DamageReportEvent[]
+  auditLogs       AuditLog[]
+  uploadedDocs    Document[]
+  payments        Payment[]        @relation("PaymentCreator")
+  assignments     PaymentAssignment[]
+  appointments    Appointment[]    @relation("AppointmentCreator")
+  expenses        Expense[]
+
+  @@index([organizationId, role])
+}
+
+/// Freischaltung einzelner Immobilien für Mitarbeiter und Hauswarte.
+model PropertyAccess {
+  userId     String
+  propertyId String
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, propertyId])
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  userAgent  String?
+  ip         String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────── Immobilien & Objekte ───────────────────────
+
+model Property {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  street         String
+  zip            String
+  city           String
+  country        String       @default("CH")
+  type           PropertyType @default(RESIDENTIAL)
+  yearBuilt      Int?
+  purchasePriceCents Int?
+  description    String?
+  /// Informationen für Mieter (Hausordnung, Kontakte, Entsorgung ...)
+  tenantInfo     String?
+  imageDocumentId String?
+  archivedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization  Organization     @relation(fields: [organizationId], references: [id])
+  units         Unit[]
+  access        PropertyAccess[]
+  payments      Payment[]
+  documents     Document[]
+  damageReports DamageReport[]
+  conversations Conversation[]
+  tasks         Task[]
+  appointments  Appointment[]
+  expenses      Expense[]
+  announcements Announcement[]
+
+  @@index([organizationId])
+}
+
+model Unit {
+  id              String    @id @default(cuid())
+  propertyId      String
+  label           String
+  type            UnitType  @default(APARTMENT)
+  floor           String?
+  rooms           Decimal?  @db.Decimal(4, 1)
+  areaM2          Decimal?  @db.Decimal(8, 2)
+  /// Richtwert Nettomiete für Neuvermietung
+  targetRentCents Int?
+  description     String?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  property      Property       @relation(fields: [propertyId], references: [id])
+  leases        Lease[]
+  payments      Payment[]
+  documents     Document[]
+  damageReports DamageReport[]
+  conversations Conversation[]
+  tasks         Task[]
+  appointments  Appointment[]
+  expenses      Expense[]
+
+  @@unique([propertyId, label])
+}
+
+// ─────────────────────── Mieter & Verträge ───────────────────────
+
+model Tenant {
+  id             String    @id @default(cuid())
+  organizationId String
+  isCompany      Boolean   @default(false)
+  firstName      String?
+  lastName       String?
+  companyName    String?
+  email          String?
+  phone          String?
+  street         String?
+  zip            String?
+  city           String?
+  iban           String?
+  dateOfBirth    DateTime?
+  notes          String?
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  user          User?
+  leases        Lease[]
+  payments      Payment[]
+  documents     Document[]
+  damageReports DamageReport[]
+  conversations Conversation[]
+  tasks         Task[]
+  appointments  Appointment[]
+  payerAliases  PayerAlias[]
+
+  @@index([organizationId, lastName])
+}
+
+model Lease {
+  id                 String      @id @default(cuid())
+  unitId             String
+  tenantId           String
+  status             LeaseStatus @default(ACTIVE)
+  startDate          DateTime
+  endDate            DateTime?
+  /// Sollstellungen erst ab diesem Datum erzeugen (Übernahme bestehender Verträge)
+  chargesFrom        DateTime?
+  noticePeriodMonths Int         @default(3)
+  netRentCents       Int
+  utilitiesCents     Int         @default(0)
+  depositCents       Int         @default(0)
+  /// Fälligkeitstag im Monat (CH: Miete i. d. R. im Voraus am 1.)
+  dueDay             Int         @default(1)
+  /// Eindeutige Zahlungsreferenz (z. B. QR-Referenz) zur Zuordnung
+  paymentReference   String?
+  terminatedAt       DateTime?
+  terminationReason  String?
+  notes              String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  unit         Unit          @relation(fields: [unitId], references: [id])
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  charges      RentCharge[]
+  payments     Payment[]
+  documents    Document[]
+  payerAliases PayerAlias[]
+
+  @@index([unitId])
+  @@index([tenantId])
+  @@index([status])
+}
+
+/// Monatliche Sollstellung: Was ein Mietvertrag in einem Monat schuldet.
+model RentCharge {
+  id           String       @id @default(cuid())
+  leaseId      String
+  /// Periode im Format YYYY-MM
+  period       String
+  dueDate      DateTime
+  netRentCents Int
+  utilitiesCents Int        @default(0)
+  amountCents  Int
+  /// Zwischengespeicherte Summe aller Zuordnungen (wird transaktional aktualisiert)
+  paidCents    Int          @default(0)
+  status       ChargeStatus @default(OPEN)
+  note         String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  lease       Lease               @relation(fields: [leaseId], references: [id])
+  assignments PaymentAssignment[]
+
+  @@unique([leaseId, period])
+  @@index([period, status])
+}
+
+// ─────────────────────── Zahlungen ───────────────────────
+
+model Payment {
+  id              String        @id @default(cuid())
+  organizationId  String
+  /// Fortlaufende, menschenlesbare Nummer (Zahlungs-ID)
+  number          Int
+  tenantId        String?
+  leaseId         String?
+  propertyId      String?
+  unitId          String?
+  bookingDate     DateTime
+  valueDate       DateTime?
+  amountCents     Int
+  /// Sollbetrag des Mietvertrags zum Zeitpunkt der Zahlung
+  expectedCents   Int?
+  currency        String        @default("CHF")
+  method          PaymentMethod @default(BANK_TRANSFER)
+  reference       String?
+  payerName       String?
+  payerIban       String?
+  /// Originaltext aus Kontoauszug / Import
+  rawText         String?
+  source          PaymentSource @default(MANUAL)
+  importRowId     String?       @unique
+  documentId      String?
+  /// Vertrauensscore der automatischen Erkennung (0–100)
+  confidence      Int?
+  status          PaymentStatus @default(REVIEW)
+  /// Hash zur Duplikaterkennung
+  fingerprint     String?
+  note            String?
+  reversedAt      DateTime?
+  reversalReason  String?
+  createdById     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  tenant       Tenant?             @relation(fields: [tenantId], references: [id])
+  lease        Lease?              @relation(fields: [leaseId], references: [id])
+  property     Property?           @relation(fields: [propertyId], references: [id])
+  unit         Unit?               @relation(fields: [unitId], references: [id])
+  document     Document?           @relation("PaymentSourceDocument", fields: [documentId], references: [id])
+  importRow    ImportRow?          @relation(fields: [importRowId], references: [id])
+  createdBy    User?               @relation("PaymentCreator", fields: [createdById], references: [id])
+  assignments  PaymentAssignment[]
+  documents    Document[]          @relation("PaymentDocuments")
+
+  @@unique([organizationId, number])
+  @@index([organizationId, bookingDate])
+  @@index([organizationId, fingerprint])
+  @@index([tenantId])
+  @@index([status])
+}
+
+/// Verknüpft eine Zahlung (oder einen Teil davon) mit einer monatlichen Sollstellung.
+model PaymentAssignment {
+  id           String   @id @default(cuid())
+  paymentId    String
+  rentChargeId String
+  amountCents  Int
+  automatic    Boolean  @default(false)
+  confidence   Int?
+  createdById  String?
+  createdAt    DateTime @default(now())
+
+  payment    Payment    @relation(fields: [paymentId], references: [id])
+  rentCharge RentCharge @relation(fields: [rentChargeId], references: [id])
+  createdBy  User?      @relation(fields: [createdById], references: [id])
+
+  @@index([paymentId])
+  @@index([rentChargeId])
+}
+
+/// Importvorgang (PDF-Kontoauszug, CSV, Excel)
+model ImportBatch {
+  id             String            @id @default(cuid())
+  organizationId String
+  fileName       String
+  fileType       ImportFileType
+  documentId     String?
+  status         ImportBatchStatus @default(ANALYZING)
+  error          String?
+  /// Erkanntes Kontoauszugsformat / Parser-Metadaten
+  meta           Json              @default("{}")
+  createdById    String
+  createdAt      DateTime          @default(now())
+  postedAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  document     Document?    @relation(fields: [documentId], references: [id])
+  rows         ImportRow[]
+
+  @@index([organizationId, createdAt])
+}
+
+/// Einzelne erkannte Buchung eines Imports – Vorschau vor dem Verbuchen.
+model ImportRow {
+  id                String          @id @default(cuid())
+  batchId           String
+  rowIndex          Int
+  bookingDate       DateTime
+  amountCents       Int
+  isCredit          Boolean         @default(true)
+  payerName         String?
+  payerIban         String?
+  reference         String?
+  rawText           String
+  fingerprint       String
+  suggestedTenantId String?
+  suggestedLeaseId  String?
+  suggestedPeriod   String?
+  /// Vorgeschlagene Aufteilung auf Sollstellungen [{chargeId, period, amountCents}]
+  allocation        Json            @default("[]")
+  confidence        Int             @default(0)
+  matchReasons      Json            @default("[]")
+  status            ImportRowStatus @default(UNMATCHED)
+  confirmed         Boolean         @default(false)
+  /// Manuell korrigiert – fliesst in die Lernlogik ein
+  corrected         Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  batch   ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  payment Payment?
+
+  @@index([batchId])
+}
+
+/// Lernlogik: bestätigte Verbindungen zwischen Zahlernamen/IBAN und Mietern.
+model PayerAlias {
+  id             String   @id @default(cuid())
+  organizationId String
+  normalizedName String
+  iban           String?
+  tenantId       String
+  leaseId        String?
+  timesConfirmed Int      @default(1)
+  lastUsedAt     DateTime @default(now())
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease        Lease?       @relation(fields: [leaseId], references: [id])
+
+  @@unique([organizationId, normalizedName, tenantId])
+  @@index([organizationId, iban])
+}
+
+// ─────────────────────── Dokumente ───────────────────────
+
+model Document {
+  id                  String           @id @default(cuid())
+  organizationId      String
+  name                String
+  mimeType            String
+  sizeBytes           Int
+  storageKey          String           @unique
+  sha256              String
+  category            DocumentCategory @default(OTHER)
+  /// Sicherheit der automatischen Klassifizierung (0–100)
+  classificationScore Int?
+  description         String?
+  propertyId          String?
+  unitId              String?
+  tenantId            String?
+  leaseId             String?
+  paymentId           String?
+  damageReportId      String?
+  expenseId           String?
+  messageId           String?
+  visibleToTenant     Boolean          @default(false)
+  uploadedById        String?
+  createdAt           DateTime         @default(now())
+  deletedAt           DateTime?
+
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  property       Property?     @relation(fields: [propertyId], references: [id])
+  unit           Unit?         @relation(fields: [unitId], references: [id])
+  tenant         Tenant?       @relation(fields: [tenantId], references: [id])
+  lease          Lease?        @relation(fields: [leaseId], references: [id])
+  payment        Payment?      @relation("PaymentDocuments", fields: [paymentId], references: [id])
+  damageReport   DamageReport? @relation(fields: [damageReportId], references: [id])
+  expense        Expense?      @relation(fields: [expenseId], references: [id])
+  message        Message?      @relation(fields: [messageId], references: [id])
+  uploadedBy     User?         @relation(fields: [uploadedById], references: [id])
+  sourceOf       Payment[]     @relation("PaymentSourceDocument")
+  importBatches  ImportBatch[]
+  conversations  Conversation[]
+
+  @@index([organizationId, category])
+  @@index([propertyId])
+  @@index([tenantId])
+}
+
+// ─────────────────────── Mängel ───────────────────────
+
+model DamageReport {
+  id                   String         @id @default(cuid())
+  organizationId       String
+  ticketNumber         Int
+  propertyId           String
+  unitId               String?
+  tenantId             String?
+  reportedById         String?
+  category             DamageCategory
+  title                String
+  description          String
+  priority             Priority       @default(MEDIUM)
+  status               DamageStatus   @default(NEW)
+  preferredAppointment String?
+  location             String?
+  assignedCaretakerId  String?
+  serviceProviderId    String?
+  estimatedCostCents   Int?
+  resolvedAt           DateTime?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  organization     Organization        @relation(fields: [organizationId], references: [id])
+  property         Property            @relation(fields: [propertyId], references: [id])
+  unit             Unit?               @relation(fields: [unitId], references: [id])
+  tenant           Tenant?             @relation(fields: [tenantId], references: [id])
+  reportedBy       User?               @relation("DamageReporter", fields: [reportedById], references: [id])
+  assignedCaretaker User?              @relation("DamageCaretaker", fields: [assignedCaretakerId], references: [id])
+  serviceProvider  ServiceProvider?    @relation(fields: [serviceProviderId], references: [id])
+  events           DamageReportEvent[]
+  documents        Document[]
+  conversations    Conversation[]
+  tasks            Task[]
+  appointments     Appointment[]
+  expenses         Expense[]
+
+  @@unique([organizationId, ticketNumber])
+  @@index([organizationId, status])
+}
+
+/// Lückenlose Historie eines Tickets
+model DamageReportEvent {
+  id             String   @id @default(cuid())
+  damageReportId String
+  userId         String?
+  type           String
+  message        String?
+  data           Json     @default("{}")
+  /// Für den Mieter sichtbar
+  isPublic       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  damageReport DamageReport @relation(fields: [damageReportId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([damageReportId, createdAt])
+}
+
+// ─────────────────────── Kommunikation ───────────────────────
+
+model Conversation {
+  id             String   @id @default(cuid())
+  organizationId String
+  subject        String
+  propertyId     String?
+  unitId         String?
+  tenantId       String?
+  damageReportId String?
+  documentId     String?
+  lastMessageAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  organization Organization              @relation(fields: [organizationId], references: [id])
+  property     Property?                 @relation(fields: [propertyId], references: [id])
+  unit         Unit?                     @relation(fields: [unitId], references: [id])
+  tenant       Tenant?                   @relation(fields: [tenantId], references: [id])
+  damageReport DamageReport?             @relation(fields: [damageReportId], references: [id])
+  document     Document?                 @relation(fields: [documentId], references: [id])
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([organizationId, lastMessageAt])
+}
+
+model ConversationParticipant {
+  conversationId String
+  userId         String
+  lastReadAt     DateTime?
+  joinedAt       DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@id([conversationId, userId])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  /// Vorbereitet für E-Mail / SMS / Push / WhatsApp
+  channel        String   @default("PLATFORM")
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id])
+  attachments  Document[]
+
+  @@index([conversationId, createdAt])
+}
+
+model Announcement {
+  id             String    @id @default(cuid())
+  organizationId String
+  propertyId     String?
+  title          String
+  body           String
+  important      Boolean   @default(false)
+  publishedAt    DateTime  @default(now())
+  expiresAt      DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  property     Property?    @relation(fields: [propertyId], references: [id])
+
+  @@index([organizationId, publishedAt])
+}
+
+// ─────────────────────── Aufgaben & Termine ───────────────────────
+
+model Task {
+  id             String     @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  status         TaskStatus @default(OPEN)
+  priority       Priority   @default(MEDIUM)
+  dueDate        DateTime?
+  assigneeId     String?
+  createdById    String?
+  propertyId     String?
+  unitId         String?
+  tenantId       String?
+  damageReportId String?
+  completedAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  assignee     User?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy    User?         @relation("TaskCreator", fields: [createdById], references: [id])
+  property     Property?     @relation(fields: [propertyId], references: [id])
+  unit         Unit?         @relation(fields: [unitId], references: [id])
+  tenant       Tenant?       @relation(fields: [tenantId], references: [id])
+  damageReport DamageReport? @relation(fields: [damageReportId], references: [id])
+
+  @@index([organizationId, status])
+}
+
+model Appointment {
+  id              String    @id @default(cuid())
+  organizationId  String
+  title           String
+  description     String?
+  startAt         DateTime
+  endAt           DateTime?
+  location        String?
+  propertyId      String?
+  unitId          String?
+  tenantId        String?
+  damageReportId  String?
+  visibleToTenant Boolean   @default(false)
+  reminderSentAt  DateTime?
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  property     Property?     @relation(fields: [propertyId], references: [id])
+  unit         Unit?         @relation(fields: [unitId], references: [id])
+  tenant       Tenant?       @relation(fields: [tenantId], references: [id])
+  damageReport DamageReport? @relation(fields: [damageReportId], references: [id])
+  createdBy    User?         @relation("AppointmentCreator", fields: [createdById], references: [id])
+
+  @@index([organizationId, startAt])
+}
+
+model Notification {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  type           String
+  title          String
+  body           String?
+  link           String?
+  entityType     String?
+  entityId       String?
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+// ─────────────────────── Finanzen ───────────────────────
+
+model Expense {
+  id                String          @id @default(cuid())
+  organizationId    String
+  propertyId        String
+  unitId            String?
+  serviceProviderId String?
+  damageReportId    String?
+  category          ExpenseCategory
+  date              DateTime
+  amountCents       Int
+  description       String
+  invoiceNumber     String?
+  createdById       String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  property        Property         @relation(fields: [propertyId], references: [id])
+  unit            Unit?            @relation(fields: [unitId], references: [id])
+  serviceProvider ServiceProvider? @relation(fields: [serviceProviderId], references: [id])
+  damageReport    DamageReport?    @relation(fields: [damageReportId], references: [id])
+  createdBy       User?            @relation(fields: [createdById], references: [id])
+  documents       Document[]
+
+  @@index([organizationId, date])
+  @@index([propertyId])
+}
+
+model ServiceProvider {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  trade          String?
+  contactName    String?
+  email          String?
+  phone          String?
+  street         String?
+  zip            String?
+  city           String?
+  notes          String?
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  user          User?
+  damageReports DamageReport[]
+  expenses      Expense[]
+}
+
+// ─────────────────────── Nachvollziehbarkeit & Automatisierung ───────────────────────
+
+/// Unveränderliches Änderungsprotokoll
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String?
+  summary        String?
+  oldValues      Json?
+  newValues      Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model AutomationRun {
+  id             String              @id @default(cuid())
+  organizationId String
+  job            String
+  status         AutomationRunStatus @default(RUNNING)
+  trigger        String              @default("SCHEDULE")
+  result         Json                @default("{}")
+  error          String?
+  startedAt      DateTime            @default(now())
+  finishedAt     DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, startedAt])
+}
+
+/// Excel-Synchronisation: Vorschau und Anwendung
+model SyncJob {
+  id             String    @id @default(cuid())
+  organizationId String
+  kind           String
+  fileName       String?
+  documentId     String?
+  status         String    @default("PREVIEW")
+  preview        Json      @default("{}")
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  appliedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+/// Atomare Nummernkreise (Zahlungs-ID, Ticketnummer)
+model Counter {
+  organizationId String
+  key            String
+  value          Int    @default(0)
+
+  @@id([organizationId, key])
+}
