@@ -124,6 +124,7 @@ const TENANT_PERMS: Permission[] = ['portal:access'];
 /** Dienstleister: nur zugewiesene Tickets. */
 const PROVIDER_PERMS: Permission[] = [
   'damage:read',
+  'document:read',
   'damage:write',
   'message:read',
   'message:write',

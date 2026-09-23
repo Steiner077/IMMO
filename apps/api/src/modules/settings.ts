@@ -3,12 +3,14 @@ import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { parse } from '../lib/http.js';
-import { requirePermission } from '../auth/context.js';
+import { isStaffUser, requirePermission } from '../auth/context.js';
+import { forbidden } from '../lib/errors.js';
 import { getOrgSettings, orgSettingsSchema } from '../services/settings.js';
 import { auditReq } from '../services/audit.js';
 
 export async function settingsRoutes(app: FastifyInstance) {
   app.get('/', async (req) => {
+    if (!isStaffUser(req.user) && req.user.role !== 'SERVICE_PROVIDER') throw forbidden();
     const org = await prisma.organization.findUniqueOrThrow({ where: { id: req.user.organizationId } });
     return { organization: { id: org.id, name: org.name, currency: org.currency }, settings: await getOrgSettings(org.id) };
   });

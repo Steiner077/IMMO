@@ -6,6 +6,7 @@ import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { extractPdfLines } from '../import/pdf.js';
 import { parseStatementLines } from '../import/statement-parser.js';
 import { parseCsvBuffer, parseXlsxBuffer } from '../import/table-parser.js';
+import { parseCamtBuffer } from '../import/camt-parser.js';
 import { matchTransaction, type MatchCandidate } from '../import/matching.js';
 import { allocate, type AllocationLine } from '../import/allocation.js';
 import type { ParseResult } from '../import/types.js';
@@ -27,6 +28,7 @@ export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer)
     return res;
   }
   if (fileType === 'CSV') return parseCsvBuffer(data);
+  if (fileType === 'CAMT') return parseCamtBuffer(data);
   return parseXlsxBuffer(data);
 }
 
@@ -304,7 +306,7 @@ export async function postBatch(batchId: string, user: AuthUser, req?: FastifyRe
   if (batch.status === 'ANALYZING') throw conflict('Der Import wird noch analysiert.');
   const rows = await prisma.importRow.findMany({ where: { batchId, confirmed: true, status: { not: 'POSTED' } }, orderBy: { rowIndex: 'asc' } });
   const results: { rowId: string; ok: boolean; paymentId?: string; error?: string }[] = [];
-  const source = batch.fileType === 'PDF' ? 'PDF_IMPORT' : batch.fileType === 'CSV' ? 'CSV_IMPORT' : 'EXCEL_IMPORT';
+  const source = ({ PDF: 'PDF_IMPORT', CSV: 'CSV_IMPORT', XLSX: 'EXCEL_IMPORT', CAMT: 'CAMT_IMPORT' } as const)[batch.fileType];
 
   for (const row of rows) {
     try {

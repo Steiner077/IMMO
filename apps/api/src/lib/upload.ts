@@ -13,6 +13,7 @@ const EXT_MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.csv': 'text/csv',
   '.txt': 'text/plain',
+  '.xml': 'application/xml',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.xls': 'application/vnd.ms-excel',
   '.jpg': 'image/jpeg',

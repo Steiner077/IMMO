@@ -62,7 +62,7 @@ export function publicUser(u: NonNullable<Awaited<ReturnType<typeof loadAuthUser
 export async function authRoutes(app: FastifyInstance) {
   app.post(
     '/login',
-    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { config: { rateLimit: { max: config.LOGIN_RATE_LIMIT, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const body = parse(z.object({ email: z.string().email(), password: z.string().min(1).max(200) }), req.body);
       const user = await prisma.user.findUnique({ where: { email: body.email.toLowerCase().trim() } });

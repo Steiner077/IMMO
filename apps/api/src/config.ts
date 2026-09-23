@@ -20,6 +20,8 @@ const schema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   LOG_LEVEL: z.string().default('info'),
+  // Maximale Anmeldeversuche pro IP und Minute
+  LOGIN_RATE_LIMIT: z.coerce.number().default(10),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -22,7 +22,16 @@ export async function messageRoutes(app: FastifyInstance) {
   /** Mögliche Empfänger (Mieter mit App-Zugang, Hauswarte, Dienstleister, Team) */
   app.get('/recipients', { preHandler: requirePermission('message:write') }, async (req) =>
     prisma.user.findMany({
-      where: { organizationId: req.user.organizationId, isActive: true, id: { not: req.user.id } },
+      where: {
+        organizationId: req.user.organizationId,
+        isActive: true,
+        id: { not: req.user.id },
+        // Mitarbeitende mit Immobilien-Freigabe sehen nur Mieter dieser Immobilien
+        ...(req.user.propertyIds
+          ? { OR: [{ role: { not: 'TENANT' } }, { tenant: { leases: { some: { status: { in: ['ACTIVE', 'TERMINATED'] }, unit: { propertyId: { in: req.user.propertyIds } } } } } }] }
+          : {}),
+        ...(req.user.role === 'SERVICE_PROVIDER' ? { role: { in: ['OWNER', 'MANAGER', 'EMPLOYEE', 'CARETAKER'] } } : {}),
+      },
       select: { id: true, firstName: true, lastName: true, role: true, tenantId: true, tenant: { select: { leases: { where: { status: { in: ['ACTIVE', 'TERMINATED'] } }, select: { unit: { select: { label: true, propertyId: true, property: { select: { name: true } } } } } } } } },
       orderBy: [{ role: 'asc' }, { lastName: 'asc' }],
     }),

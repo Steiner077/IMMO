@@ -5,7 +5,7 @@ import { ROLES, ROLE_LABELS } from '@immo/shared';
 import { prisma } from '../lib/prisma.js';
 import { idParam, parse } from '../lib/http.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
-import { requirePermission } from '../auth/context.js';
+import { can, isStaffUser, requirePermission } from '../auth/context.js';
 import { hashPassword, passwordPolicyError } from '../auth/password.js';
 import { auditReq, diff } from '../services/audit.js';
 
@@ -31,12 +31,18 @@ export function generateInitialPassword() {
 export async function userRoutes(app: FastifyInstance) {
   /** Kontaktliste für Nachrichten / Zuweisungen (ohne sensible Daten) */
   app.get('/directory', async (req) => {
+    if (!isStaffUser(req.user)) throw forbidden();
     const q = parse(z.object({ role: z.string().optional() }), req.query);
+    // Mieterkonten nur für Rollen mit Mieterzugriff – nie für andere Mieter
+    const roles = (q.role ? q.role.split(',') : ROLES.filter((r) => r !== 'TENANT')).filter((r) => r !== 'TENANT' || can(req.user, 'tenant:read'));
     return prisma.user.findMany({
       where: {
         organizationId: req.user.organizationId,
         isActive: true,
-        role: q.role ? { in: q.role.split(',') as never } : { notIn: ['TENANT'] },
+        role: { in: roles as never },
+        ...(roles.includes('TENANT') && req.user.propertyIds
+          ? { OR: [{ role: { not: 'TENANT' } }, { tenant: { leases: { some: { unit: { propertyId: { in: req.user.propertyIds } } } } } }] }
+          : {}),
       },
       select: { id: true, firstName: true, lastName: true, role: true },
       orderBy: { lastName: 'asc' },

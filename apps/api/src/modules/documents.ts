@@ -20,6 +20,9 @@ export function documentScope(user: AuthUser): Prisma.DocumentWhereInput {
   if (user.role === 'TENANT') {
     return { ...where, visibleToTenant: true, OR: [{ tenantId: user.tenantId }, { lease: { tenantId: user.tenantId ?? '' } }, { damageReport: { tenantId: user.tenantId } }] };
   }
+  if (user.role === 'SERVICE_PROVIDER') {
+    return { ...where, category: { notIn: [...FINANCIAL_DOCUMENT_CATEGORIES] }, damageReport: { serviceProviderId: user.serviceProviderId ?? '__none__' } };
+  }
   const and: Prisma.DocumentWhereInput[] = [];
   const pf = propertyIdFilter(user);
   if (pf) {

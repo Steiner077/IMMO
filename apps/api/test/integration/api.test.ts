@@ -1,14 +1,14 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
 
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.STORAGE_DIR = './storage-test';
 process.env.LOG_LEVEL = 'warn';
+process.env.LOGIN_RATE_LIMIT = '1000';
 process.env.JWT_SECRET ??= 'integration-test-secret-integration-test-secret';
 
-let app: FastifyInstance;
+let app: Awaited<ReturnType<typeof import('../../src/app.js').buildApp>>;
 const PASSWORD = 'Immo2026!demo';
 
 async function login(email: string, appKind: 'admin' | 'tenant' = 'admin') {
@@ -53,6 +53,12 @@ describe('Rollen und Datenumfang', () => {
     expect((await get(t, '/api/v1/tenants')).statusCode).toBe(403);
     const damages = (await get(t, '/api/v1/portal/damages')).json();
     expect(damages.map((d: { ticketNumber: number }) => d.ticketNumber)).toEqual([1047]);
+    // Keine Liste anderer Benutzer/Mieter über Hilfs-Endpunkte
+    expect((await get(t, '/api/v1/users/directory?role=TENANT')).statusCode).toBe(403);
+    expect((await get(t, '/api/v1/conversations/recipients')).statusCode).toBe(403);
+    expect((await get(t, '/api/v1/settings')).statusCode).toBe(403);
+    const search = (await get(t, '/api/v1/search?q=Keller')).json();
+    expect(Object.values(search).every((v) => (v as unknown[]).length === 0)).toBe(true);
     const conv = (await get(t, '/api/v1/portal/conversations')).json();
     expect(conv.every((c: { subject: string }) => c.subject !== 'Lift Wohnpark Lindenhof')).toBe(true);
   });
@@ -75,6 +81,8 @@ describe('Rollen und Datenumfang', () => {
     expect(((await get(t, '/api/v1/properties')).json() as { name: string }[]).map((p) => p.name)).toEqual(['Wohnpark Lindenhof']);
     const tenants = (await get(t, '/api/v1/tenants')).json() as { lastName: string }[];
     expect(tenants.map((x) => x.lastName)).not.toContain('Müller');
+    const recipients = (await get(t, '/api/v1/conversations/recipients')).json() as { lastName: string; role: string }[];
+    expect(recipients.filter((r) => r.role === 'TENANT').map((r) => r.lastName)).not.toContain('Müller');
     for (const url of [`/api/v1/properties/${foreign.id}`, `/api/v1/payments?propertyId=${foreign.id}`, `/api/v1/damages?propertyId=${foreign.id}`, `/api/v1/monthly/2026-09?propertyId=${foreign.id}`, `/api/v1/expenses?propertyId=${foreign.id}`]) {
       expect((await get(t, url)).statusCode, url).toBe(403);
     }
@@ -87,6 +95,36 @@ describe('Rollen und Datenumfang', () => {
   });
 });
 
+describe('Mieter-App: Mangel melden', () => {
+  it('erstellt ein Ticket mit Foto und benachrichtigt die Verwaltung', async () => {
+    const t = await login('mieter@immo.local', 'tenant');
+    const boundary = '----immodamage';
+    // 1x1 PNG
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    const field = (n: string, v: string) => `--${boundary}\r\nContent-Disposition: form-data; name="${n}"\r\n\r\n${v}\r\n`;
+    const payload = Buffer.concat([
+      Buffer.from(field('category', 'HEATING') + field('title', 'Heizung kalt') + field('description', 'Alle Heizkörper sind kalt.') + field('priority', 'HIGH')),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="foto.png"\r\nContent-Type: image/png\r\n\r\n`),
+      png,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const r = await app.inject({ method: 'POST', url: '/api/v1/portal/damages', headers: { authorization: `Bearer ${t}`, 'content-type': `multipart/form-data; boundary=${boundary}` }, payload });
+    expect(r.statusCode, r.body).toBe(200);
+    const { id, ticketNumber } = r.json();
+    expect(ticketNumber).toBeGreaterThan(1048);
+    const detail = (await get(t, `/api/v1/portal/damages/${id}`)).json();
+    expect(detail.documents).toHaveLength(1);
+    expect(detail.status).toBe('NEW');
+    // Andere Mieterin sieht das Ticket nicht
+    const other = await login('mieter2@immo.local', 'tenant');
+    expect((await get(other, `/api/v1/portal/damages/${id}`)).statusCode).toBe(404);
+    // Verwaltung wurde benachrichtigt
+    const admin = await login('verwaltung@immo.local');
+    const notes = (await get(admin, '/api/v1/notifications?type=DAMAGE_NEW')).json();
+    expect(notes.items.some((n: { title: string }) => n.title.includes(String(ticketNumber)))).toBe(true);
+  });
+});
+
 describe('Zahlungsimport (PDF) End-to-End', () => {
   it('analysiert, verbucht nur bestätigte Zahlungen und lernt Zuordnungen', async () => {
     const t = await login('verwaltung@immo.local');
@@ -95,7 +133,8 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     const up = await app.inject({ method: 'POST', url: '/api/v1/imports', headers: { ...auth, ...mp.headers }, payload: mp.payload });
     expect(up.statusCode, up.body).toBe(200);
     const id = up.json().id;
-    let batch;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let batch: any;
     for (let i = 0; i < 50; i++) {
       batch = (await get(t, `/api/v1/imports/${id}`)).json();
       if (batch.status !== 'ANALYZING') break;

@@ -8,7 +8,7 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspaces --if-present",
+    "dev": "concurrently -n api,web,mieter -c blue,green,magenta \"npm run dev -w @immo/api\" \"npm run dev -w @immo/web\" \"npm run dev -w @immo/tenant\"",
     "dev:api": "npm run dev -w @immo/api",
     "dev:web": "npm run dev -w @immo/web",
     "dev:tenant": "npm run dev -w @immo/tenant",
@@ -17,9 +17,14 @@
     "test": "npm run test --workspaces --if-present",
     "db:migrate": "npm run db:migrate -w @immo/api",
     "db:deploy": "npm run db:deploy -w @immo/api",
-    "db:seed": "npm run db:seed -w @immo/api"
+    "db:seed": "npm run db:seed -w @immo/api",
+    "test:integration": "npm run test:integration -w @immo/api",
+    "sample:files": "npm run sample:pdf -w @immo/api"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.4"
   }
 }

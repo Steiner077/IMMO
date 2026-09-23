@@ -67,6 +67,7 @@ export const ALLOWED_MIME = new Set([
   'video/quicktime',
   'text/csv',
   'text/plain',
+  'application/xml',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/msword',

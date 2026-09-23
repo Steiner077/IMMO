@@ -66,4 +66,39 @@ const csv = [
   ...rows.map((r) => [r.date, r.date, r.text[0], r.text[1], r.text.slice(2).join(' ').replace('Mitteilung: ', ''), r.debit ? (r.debit / 100).toFixed(2) : '', r.credit ? (r.credit / 100).toFixed(2) : ''].join(';')),
 ].join('\n');
 writeFileSync(path.join(out, 'kontoauszug-2026-09.csv'), csv);
+// ───── camt.053 (ISO 20022) ─────
+const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const iso = (d: string) => d.split('.').reverse().join('-');
+const entries = rows
+  .map((r) => {
+    const credit = !!r.credit;
+    const amount = ((r.credit ?? r.debit)! / 100).toFixed(2);
+    const party = credit ? `<Dbtr><Nm>${esc(r.text[1])}</Nm></Dbtr>` : `<Cdtr><Nm>${esc(r.text[1])}</Nm></Cdtr>`;
+    const iban = r.text.find((t) => t.startsWith('IBAN'))?.replace('IBAN ', '').replace(/\s/g, '');
+    const msg = r.text.slice(2).filter((t) => !t.startsWith('IBAN') && !/\d{4} [A-Z]/.test(t)).join(' ').replace('Mitteilung: ', '');
+    return `   <Ntry>
+    <Amt Ccy="CHF">${amount}</Amt><CdtDbtInd>${credit ? 'CRDT' : 'DBIT'}</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>${iso(r.date)}</Dt></BookgDt><ValDt><Dt>${iso(r.date)}</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties>${party}${iban && credit ? `<DbtrAcct><Id><IBAN>${iban}</IBAN></Id></DbtrAcct>` : ''}</RltdPties>
+     ${msg ? `<RmtInf><Ustrd>${esc(msg)}</Ustrd></RmtInf>` : ''}
+    </TxDtls></NtryDtls>
+   </Ntry>`;
+  })
+  .join('\n');
+writeFileSync(
+  path.join(out, 'kontoauszug-2026-09.camt053.xml'),
+  `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.04">
+ <BkToCstmrStmt>
+  <GrpHdr><MsgId>SAMPLE-2026-09</MsgId><CreDtTm>2026-09-30T18:00:00</CreDtTm></GrpHdr>
+  <Stmt>
+   <Id>STMT-2026-09</Id>
+   <Acct><Id><IBAN>CH1200230230123456789</IBAN></Id><Ccy>CHF</Ccy></Acct>
+${entries}
+  </Stmt>
+ </BkToCstmrStmt>
+</Document>
+`,
+);
 console.log(`Beispieldateien erstellt in ${out}`);

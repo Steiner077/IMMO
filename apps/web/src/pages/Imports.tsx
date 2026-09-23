@@ -39,7 +39,7 @@ export function ImportsPage() {
   const onFiles = (files: FileList | null) => {
     const f = files?.[0];
     if (!f) return;
-    if (!/\.(pdf|csv|xlsx|txt)$/i.test(f.name)) return toast('Bitte PDF, CSV oder Excel (.xlsx) hochladen.', 'error');
+    if (!/\.(pdf|csv|xlsx|txt|xml)$/i.test(f.name)) return toast('Bitte PDF, camt-XML, CSV oder Excel (.xlsx) hochladen.', 'error');
     upload.mutate(f);
   };
   return (
@@ -52,12 +52,12 @@ export function ImportsPage() {
         onClick={() => input.current?.click()}
         className={`mb-6 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition ${drag ? 'border-brand-500 bg-brand-50' : 'border-slate-300 bg-white hover:border-slate-400'}`}
       >
-        <input ref={input} type="file" hidden accept=".pdf,.csv,.xlsx,.txt" onChange={(e) => onFiles(e.target.files)} />
+        <input ref={input} type="file" hidden accept=".pdf,.xml,.csv,.xlsx,.txt" onChange={(e) => onFiles(e.target.files)} />
         {upload.isPending ? <Loader2 className="h-8 w-8 animate-spin text-brand-600" /> : <UploadCloud className="h-8 w-8 text-slate-400" />}
         <p className="mt-3 text-sm font-medium text-slate-800">{upload.isPending ? 'Datei wird hochgeladen …' : 'Kontoauszug hierher ziehen oder klicken'}</p>
-        <p className="mt-1 text-xs text-slate-500">PDF-Kontoauszug · CSV-Export der Bank · Excel (.xlsx) — max. 25 MB</p>
+        <p className="mt-1 text-xs text-slate-500">PDF-Kontoauszug · camt.053/054 (ISO 20022) · CSV-Export der Bank · Excel (.xlsx) — max. 25 MB</p>
         <div className="mt-4 flex gap-2 text-xs text-slate-500">
-          <Badge><FileText className="h-3 w-3" /> PDF</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> CSV</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> Excel</Badge><Badge tone="gray">Bank-API (vorbereitet)</Badge>
+          <Badge><FileText className="h-3 w-3" /> PDF</Badge><Badge><FileText className="h-3 w-3" /> camt XML</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> CSV</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> Excel</Badge><Badge tone="gray">Bank-API (vorbereitet)</Badge>
         </div>
       </div>
       <Card title="Bisherige Importe" bodyClassName="p-0">

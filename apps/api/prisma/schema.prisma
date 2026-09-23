@@ -80,6 +80,7 @@ enum PaymentSource {
   PDF_IMPORT
   CSV_IMPORT
   EXCEL_IMPORT
+  CAMT_IMPORT
   BANK_API
 }
 
@@ -87,6 +88,7 @@ enum ImportFileType {
   PDF
   CSV
   XLSX
+  CAMT
 }
 
 enum ImportBatchStatus {

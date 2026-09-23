@@ -7,6 +7,7 @@ import { requirePermission } from '../auth/context.js';
 import { readMultipart } from '../lib/upload.js';
 import { storeDocument } from '../services/documents.js';
 import { analyzeBatch, postBatch, updateImportRow } from '../services/imports.js';
+import { isCamt } from '../import/camt-parser.js';
 import { auditReq } from '../services/audit.js';
 
 export async function importRoutes(app: FastifyInstance) {
@@ -29,8 +30,12 @@ export async function importRoutes(app: FastifyInstance) {
     const { files } = await readMultipart(req);
     const file = files[0];
     if (!file) throw badRequest('Keine Datei übermittelt.');
-    const fileType = file.mimetype === 'application/pdf' ? 'PDF' : file.mimetype === 'text/csv' || file.mimetype === 'text/plain' ? 'CSV' : file.filename.toLowerCase().endsWith('.xlsx') ? 'XLSX' : null;
-    if (!fileType) throw badRequest('Unterstützt werden PDF, CSV und Excel (.xlsx).');
+    const fileType =
+      file.mimetype === 'application/pdf' ? 'PDF'
+      : file.mimetype === 'application/xml' ? (isCamt(file.buffer) ? 'CAMT' : null)
+      : file.mimetype === 'text/csv' || file.mimetype === 'text/plain' ? 'CSV'
+      : file.filename.toLowerCase().endsWith('.xlsx') ? 'XLSX' : null;
+    if (!fileType) throw badRequest('Unterstützt werden PDF, camt.053/054 (XML), CSV und Excel (.xlsx).');
     const doc = await storeDocument(prisma, req.user.organizationId, file, {
       category: fileType === 'PDF' ? 'BANK_STATEMENT' : 'RECEIPT',
       description: 'Zahlungsimport',

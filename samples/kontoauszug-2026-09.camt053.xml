@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.04">
+ <BkToCstmrStmt>
+  <GrpHdr><MsgId>SAMPLE-2026-09</MsgId><CreDtTm>2026-09-30T18:00:00</CreDtTm></GrpHdr>
+  <Stmt>
+   <Id>STMT-2026-09</Id>
+   <Acct><Id><IBAN>CH1200230230123456789</IBAN></Id><Ccy>CHF</Ccy></Acct>
+   <Ntry>
+    <Amt Ccy="CHF">1630.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-01</Dt></BookgDt><ValDt><Dt>2026-09-01</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Sandra Meier</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Miete September 2026</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">1500.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-02</Dt></BookgDt><ValDt><Dt>2026-09-02</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>M. Arnold</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Miete</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">1850.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-03</Dt></BookgDt><ValDt><Dt>2026-09-03</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Peter Müller</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Mietzins September Wohnung 3A</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">1810.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-03</Dt></BookgDt><ValDt><Dt>2026-09-03</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Schneider L.</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Miete Sept</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">420.50</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-04</Dt></BookgDt><ValDt><Dt>2026-09-04</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Cdtr><Nm>EWZ Elektrizitätswerk Zürich</Nm></Cdtr></RltdPties>
+     <RmtInf><Ustrd>Rechnung 2026-08-4471</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">2110.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-04</Dt></BookgDt><ValDt><Dt>2026-09-04</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Weber Julia</Nm></Dbtr><DbtrAcct><Id><IBAN>CH4431999123000889012</IBAN></Id></DbtrAcct></RltdPties>
+     <RmtInf><Ustrd>Wohnung A2</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">4250.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-05</Dt></BookgDt><ValDt><Dt>2026-09-05</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Bäckerei Sonnenschein GmbH</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Mietzins Laden Sept. 2026</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">1950.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-08</Dt></BookgDt><ValDt><Dt>2026-09-08</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Daniel Frei</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Miete September</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">2820.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-10</Dt></BookgDt><ValDt><Dt>2026-09-10</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Monika Keller</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Restbetrag August + September</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">500.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-12</Dt></BookgDt><ValDt><Dt>2026-09-12</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Dbtr><Nm>Hans Beispiel</Nm></Dbtr></RltdPties>
+     <RmtInf><Ustrd>Anzahlung Parkplatz</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+   <Ntry>
+    <Amt Ccy="CHF">684.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts>
+    <BookgDt><Dt>2026-09-15</Dt></BookgDt><ValDt><Dt>2026-09-15</Dt></ValDt>
+    <NtryDtls><TxDtls>
+     <RltdPties><Cdtr><Nm>Gebäudeversicherung Kanton Zürich</Nm></Cdtr></RltdPties>
+     <RmtInf><Ustrd>Police 88-1120</Ustrd></RmtInf>
+    </TxDtls></NtryDtls>
+   </Ntry>
+  </Stmt>
+ </BkToCstmrStmt>
+</Document>

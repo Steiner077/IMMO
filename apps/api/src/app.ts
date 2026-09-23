@@ -59,7 +59,9 @@ export async function buildApp() {
     }
     const fe = err as FastifyError;
     if (fe.statusCode && fe.statusCode < 500) {
-      return reply.status(fe.statusCode).send({ error: fe.code ?? 'BAD_REQUEST', message: fe.message });
+      const code = fe.statusCode === 429 ? 'RATE_LIMITED' : fe.statusCode === 413 ? 'FILE_TOO_LARGE' : (fe.code ?? 'BAD_REQUEST');
+      const message = fe.statusCode === 429 ? 'Zu viele Anfragen. Bitte warten Sie einen Moment.' : fe.message;
+      return reply.status(fe.statusCode).send({ error: code, message });
     }
     req.log.error({ err }, 'Unerwarteter Fehler');
     return reply.status(500).send({ error: 'INTERNAL', message: 'Interner Fehler. Der Vorfall wurde protokolliert.', requestId: req.id });

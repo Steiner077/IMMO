@@ -1,0 +1,40 @@
+# Automatisches HTTPS (Let's Encrypt) für beide Apps.
+# Domains in .env setzen: ADMIN_DOMAIN, TENANT_DOMAIN
+{
+	email {$ACME_EMAIL}
+}
+
+(security) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=()"
+		-Server
+	}
+	encode zstd gzip
+	request_body {
+		max_size 30MB
+	}
+}
+
+{$ADMIN_DOMAIN} {
+	import security
+	handle /api/* {
+		reverse_proxy api:4000
+	}
+	handle {
+		reverse_proxy web:80
+	}
+}
+
+{$TENANT_DOMAIN} {
+	import security
+	handle /api/* {
+		reverse_proxy api:4000
+	}
+	handle {
+		reverse_proxy tenant:80
+	}
+}
