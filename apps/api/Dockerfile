@@ -14,7 +14,8 @@ COPY apps/api apps/api
 RUN npm run build -w @immo/api && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends openssl tini && rm -rf /var/lib/apt/lists/*
+# tesseract + poppler: Texterkennung für eingescannte/fotografierte Kontoauszüge
+RUN apt-get update && apt-get install -y --no-install-recommends openssl tini tesseract-ocr tesseract-ocr-deu poppler-utils && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production STORAGE_DIR=/data/storage PORT=4000
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules

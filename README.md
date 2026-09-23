@@ -16,7 +16,13 @@ Excel ist **nicht** die Datenbank. Führende Datenquelle ist eine relationale Po
 - Dashboard mit Kennzahlen (Soll/Ist/Offen/Überfällig, Bestand, Mängel, Aufgaben, auslaufende Verträge) und Diagrammen (Einnahmen pro Monat, Soll gegen Ist, Einnahmen und Kosten pro Immobilie, offene Forderungen, Mängelentwicklung)
 - Immobilien, Mietobjekte, Mieter, Mietverträge (inkl. Kündigung, Mietänderung ab Stichtag, anteilige Monate)
 - **Zahlungsmodul**: vollständiger Datensatz je Zahlung (ID, Mieter, Vertrag, Immobilie, Wohnung, Datum, Betrag, Soll, Methode, Referenz, Originaltext, Quelle, Beleg, zugeordnete Monate, Status, Vertrauensscore), Umbuchung und Storno mit Begründungspflicht
-- **Import-Zentrale** für PDF-Kontoauszüge, **camt.053/054 (ISO 20022)**, CSV und Excel: Analyse, Vorschau, Korrektur, Bestätigung und «Alle bestätigten Zahlungen verbuchen»
+- **Import-Zentrale** – ohne Bankanbindung, so wie Sie arbeiten:
+  - **PDF-Kontoauszug** hochladen (digital oder **eingescannter Ausdruck**)
+  - **Foto** eines Ausdrucks (Handy-Kamera direkt aus der App)
+  - **Text einfügen**: Kontoauszug aus PDF/E-Banking kopieren und einfügen
+  - zusätzlich camt.053/054 (XML), CSV und Excel
+  - Texterkennung (OCR) für Scans/Fotos und **Saldo-Kontrolle**: jeder Betrag wird mit dem laufenden Kontosaldo gegengerechnet – bestätigt Betrag und Richtung und deckt Lesefehler auf
+  - Analyse, Vorschau, Korrektur, Bestätigung und «Alle bestätigten Zahlungen verbuchen»
 - **Monatsabschluss** mit Status je Mieter und Sprung in die vollständige Zahlungshistorie
 - **Lernlogik**: Korrekturen (z. B. «M. Arnold» → Mario Arnold) werden für künftige Importe gelernt
 - Mängelmanagement mit Tickets, Verlauf, Fotos, Hauswart- und Handwerkerzuweisung, Terminen und Kosten
@@ -31,7 +37,7 @@ Excel ist **nicht** die Datenbank. Führende Datenquelle ist eine relationale Po
 
 ## Schnellstart (Entwicklung)
 
-Voraussetzungen: Node.js ≥ 20, PostgreSQL ≥ 14.
+Voraussetzungen: Node.js ≥ 20, PostgreSQL ≥ 14. Für Scans/Fotos zusätzlich `tesseract-ocr`, `tesseract-ocr-deu` und `poppler-utils` (im Docker-Image enthalten).
 
 ```bash
 npm install
@@ -56,7 +62,7 @@ Passwort für alle Demo-Benutzer: `Immo2026!demo`
 | Mieter Peter Müller | `mieter@immo.local` | Mieter-App |
 | Mieterin Monika Keller | `mieter2@immo.local` | Mieter-App |
 
-**Demo-Ablauf Zahlungsimport:** Melden Sie sich als Verwaltung an. Öffnen Sie «Zahlungen importieren» und laden Sie `samples/kontoauszug-2026-09.pdf` (oder die `.camt053.xml` bzw. `.csv`) hoch. Klicken Sie auf «Alle sicheren bestätigen», prüfen und korrigieren Sie «M. Arnold», und wählen Sie dann «Alle bestätigten Zahlungen verbuchen». Danach zeigen Monatsabschluss, Mieterkonten und Dashboard den neuen Stand.
+**Demo-Ablauf Zahlungsimport:** Melden Sie sich als Verwaltung an. Öffnen Sie «Zahlungen importieren» und laden Sie `samples/kontoauszug-2026-09.pdf` hoch – oder den eingescannten Ausdruck `kontoauszug-2026-09-scan.pdf`, das Handyfoto `kontoauszug-2026-09-foto.jpg`, bzw. fügen Sie den Text unter «Text einfügen» ein. Klicken Sie auf «Alle sicheren bestätigen», prüfen und korrigieren Sie «M. Arnold», und wählen Sie dann «Alle bestätigten Zahlungen verbuchen». Danach zeigen Monatsabschluss, Mieterkonten und Dashboard den neuen Stand.
 
 ## Tests
 

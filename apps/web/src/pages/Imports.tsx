@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
+import { AlertTriangle, Camera, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
 import { Fragment, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { useAction } from '@/lib/hooks';
 import { chf, formatDate, formatDateTime, formatPeriod, tenantName } from '@/lib/format';
 import type { TenantRef } from '@/lib/types';
-import { Badge, Button, Card, ConfidenceBar, EmptyState, Loading, Modal, PageHeader, StatCard, useToast } from '@/components/ui';
+import { Badge, Button, Card, ConfidenceBar, EmptyState, Loading, Modal, PageHeader, StatCard, Tabs, Textarea, useToast } from '@/components/ui';
 import { ImportBadge } from '@/components/StatusBadge';
 import { AllocationEditor, type AllocationValue } from '@/components/AllocationEditor';
 
@@ -26,7 +26,11 @@ export function ImportsPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [mode, setMode] = useState<'file' | 'paste'>('file');
+  const [text, setText] = useState('');
+  const paste = useAction(() => api<{ id: string }>('/imports/text', { body: { text } }), { invalidate: [['imports']], onSuccess: (r) => navigate(`/zahlungen/import/${r.id}`) });
   const { data, isLoading } = useQuery({ queryKey: ['imports'], queryFn: () => api<Batch[]>('/imports') });
   const upload = useAction(
     (file: File) => {
@@ -39,12 +43,23 @@ export function ImportsPage() {
   const onFiles = (files: FileList | null) => {
     const f = files?.[0];
     if (!f) return;
-    if (!/\.(pdf|csv|xlsx|txt|xml)$/i.test(f.name)) return toast('Bitte PDF, camt-XML, CSV oder Excel (.xlsx) hochladen.', 'error');
+    if (!/\.(pdf|csv|xlsx|txt|xml|jpe?g|png|webp)$/i.test(f.name)) return toast('Bitte PDF, Foto/Scan (JPG, PNG), camt-XML, CSV oder Excel hochladen.', 'error');
     upload.mutate(f);
   };
   return (
     <>
-      <PageHeader title="Zahlungen importieren" subtitle="Kontoauszug hochladen – das System erkennt Zahlungen, ordnet sie Mietern und Monaten zu und zeigt eine Vorschau." />
+      <PageHeader title="Zahlungen importieren" subtitle="Kontoauszug als PDF, Scan oder Foto hochladen – oder den Text einfügen. Das System erkennt Zahlungen, ordnet sie Mietern und Monaten zu und zeigt eine Vorschau." />
+      <Tabs value={mode} onChange={(k) => setMode(k as 'file' | 'paste')} tabs={[{ key: 'file', label: <span className="flex items-center gap-2"><UploadCloud className="h-4 w-4" />PDF, Scan oder Foto</span> }, { key: 'paste', label: <span className="flex items-center gap-2"><ClipboardPaste className="h-4 w-4" />Text einfügen</span> }]} />
+      {mode === 'paste' ? (
+        <Card className="mb-6">
+          <p className="mb-3 text-sm text-slate-600">Öffnen Sie den Kontoauszug (PDF oder E-Banking), markieren Sie alles (<kbd className="rounded border px-1 text-xs">Ctrl/⌘ A</kbd>), kopieren Sie es (<kbd className="rounded border px-1 text-xs">Ctrl/⌘ C</kbd>) und fügen Sie es hier ein.</p>
+          <Textarea rows={14} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)} placeholder={'01.09.2026 Saldovortrag 12\'400.00\n03.09.2026 Gutschrift 1\'850.00 03.09.2026 14\'250.00\nPeter Müller\nMitteilung: Mietzins September Wohnung 3A\n…'} />
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="flex items-center gap-1.5 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Enthält der Text den Kontosaldo, prüft das System jeden Betrag per Saldo-Kontrolle.</p>
+            <Button icon={<ScanLine className="h-4 w-4" />} disabled={text.trim().length < 20} loading={paste.isPending} onClick={() => paste.mutate(undefined)}>Text analysieren</Button>
+          </div>
+        </Card>
+      ) : (
       <div
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
@@ -52,14 +67,17 @@ export function ImportsPage() {
         onClick={() => input.current?.click()}
         className={`mb-6 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition ${drag ? 'border-brand-500 bg-brand-50' : 'border-slate-300 bg-white hover:border-slate-400'}`}
       >
-        <input ref={input} type="file" hidden accept=".pdf,.xml,.csv,.xlsx,.txt" onChange={(e) => onFiles(e.target.files)} />
+        <input ref={input} type="file" hidden accept=".pdf,.xml,.csv,.xlsx,.txt,.jpg,.jpeg,.png,.webp,image/*" onChange={(e) => onFiles(e.target.files)} />
+        <input ref={camera} type="file" hidden accept="image/*" capture="environment" onChange={(e) => onFiles(e.target.files)} />
         {upload.isPending ? <Loader2 className="h-8 w-8 animate-spin text-brand-600" /> : <UploadCloud className="h-8 w-8 text-slate-400" />}
         <p className="mt-3 text-sm font-medium text-slate-800">{upload.isPending ? 'Datei wird hochgeladen …' : 'Kontoauszug hierher ziehen oder klicken'}</p>
-        <p className="mt-1 text-xs text-slate-500">PDF-Kontoauszug · camt.053/054 (ISO 20022) · CSV-Export der Bank · Excel (.xlsx) — max. 25 MB</p>
-        <div className="mt-4 flex gap-2 text-xs text-slate-500">
-          <Badge><FileText className="h-3 w-3" /> PDF</Badge><Badge><FileText className="h-3 w-3" /> camt XML</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> CSV</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> Excel</Badge><Badge tone="gray">Bank-API (vorbereitet)</Badge>
+        <p className="mt-1 text-xs text-slate-500">PDF-Kontoauszug · eingescannter Ausdruck · Foto (JPG/PNG) · camt-XML · CSV · Excel — max. 25 MB</p>
+        <div className="mt-4 flex flex-wrap justify-center gap-2 text-xs text-slate-500">
+          <Badge><FileText className="h-3 w-3" /> PDF</Badge><Badge><ScanLine className="h-3 w-3" /> Scan (Texterkennung)</Badge><Badge><Camera className="h-3 w-3" /> Foto</Badge><Badge><FileSpreadsheet className="h-3 w-3" /> CSV / Excel</Badge><Badge><FileText className="h-3 w-3" /> camt XML</Badge>
         </div>
+        <Button className="mt-4 md:hidden" variant="secondary" icon={<Camera className="h-4 w-4" />} onClick={(e) => { e.stopPropagation(); camera.current?.click(); }}>Ausdruck fotografieren</Button>
       </div>
+      )}
       <Card title="Bisherige Importe" bodyClassName="p-0">
         {isLoading ? <Loading /> : !data?.length ? <EmptyState title="Noch keine Importe" /> : (
           <div className="overflow-x-auto">
@@ -92,10 +110,10 @@ export function ImportsPage() {
 interface Row {
   id: string; rowIndex: number; bookingDate: string; amountCents: number; isCredit: boolean; payerName: string | null; payerIban: string | null; reference: string | null; rawText: string;
   suggestedLeaseId: string | null; suggestedPeriod: string | null; allocation: { chargeId: string; period: string; amountCents: number }[]; confidence: number; matchReasons: string[];
-  status: string; confirmed: boolean; corrected: boolean; tenant: TenantRef | null; unit: { id: string; label: string } | null; property: { id: string; name: string } | null; monthlyCents: number | null;
+  status: string; confirmed: boolean; corrected: boolean; balanceVerified: boolean | null; tenant: TenantRef | null; unit: { id: string; label: string } | null; property: { id: string; name: string } | null; monthlyCents: number | null;
   payment: { id: string; number: number } | null;
 }
-interface BatchDetail extends Omit<Batch, 'counts' | 'creditCents'> { meta: { format?: string; warnings?: string[]; iban?: string | null }; rows: Row[] }
+interface BatchDetail extends Omit<Batch, 'counts' | 'creditCents'> { meta: { format?: string; warnings?: string[]; iban?: string | null; ocr?: boolean; balanceCheck?: { verified: number; checked: number; corrected: number } | null }; rows: Row[] }
 
 const STEPS = ['Zahlung erkennen', 'Zahler erkennen', 'Mieter suchen', 'Betrag vergleichen', 'Offene Monate prüfen', 'Monat bestimmen', 'Vertrag vergleichen', 'Sicherheit berechnen'];
 
@@ -160,7 +178,13 @@ export function ImportDetailPage() {
         )}
       />
       {b.status === 'FAILED' && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Analyse fehlgeschlagen: {b.error}</div>}
-      {b.meta.warnings?.map((w) => <div key={w} className="mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><AlertTriangle className="h-4 w-4" />{w}</div>)}
+      {b.meta.balanceCheck && (
+        <div className={`mb-3 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm ${b.meta.balanceCheck.verified === b.meta.balanceCheck.checked ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          {b.meta.balanceCheck.verified === b.meta.balanceCheck.checked ? <ShieldCheck className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}
+          Saldo-Kontrolle: {b.meta.balanceCheck.verified} von {b.meta.balanceCheck.checked} Buchungen stimmen exakt mit dem Kontosaldo überein{b.meta.ocr ? ' (Texterkennung)' : ''}.
+        </div>
+      )}
+      {b.meta.warnings?.filter((w) => !w.startsWith('Saldo-Kontrolle: ') || !b.meta.balanceCheck).map((w) => <div key={w} className="mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><AlertTriangle className="h-4 w-4" />{w}</div>)}
 
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Zahlungseingänge" value={credits.length} sub={chf(credits.reduce((s, r) => s + r.amountCents, 0))} />
@@ -221,7 +245,11 @@ export function ImportDetailPage() {
                         <p className="max-w-64 truncate pl-4.5 text-xs text-slate-500" title={r.reference ?? ''}>{!r.isCredit && 'Belastung · '}{r.reference ?? ''}</p>
                       </td>
                       <td className="whitespace-nowrap">{formatDate(r.bookingDate)}</td>
-                      <td className="num font-medium whitespace-nowrap">{r.isCredit ? '' : '−'}{chf(r.amountCents)}</td>
+                      <td className="num font-medium whitespace-nowrap">
+                        {r.isCredit ? '' : '−'}{chf(r.amountCents)}
+                        {r.balanceVerified === true && <ShieldCheck className="ml-1 inline h-3.5 w-3.5 text-emerald-600" aria-label="Durch Saldo bestätigt" />}
+                        {r.balanceVerified === false && <ShieldAlert className="ml-1 inline h-3.5 w-3.5 text-amber-600" aria-label="Passt nicht zum Saldo" />}
+                      </td>
                       <td>
                         {r.tenant ? <span className="font-medium text-slate-800">{tenantName(r.tenant)}</span> : <span className="text-slate-400">–</span>}
                         {r.corrected && <Badge tone="purple" className="ml-1">korrigiert</Badge>}

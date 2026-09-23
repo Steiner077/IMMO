@@ -3,7 +3,9 @@
  * passend zu den Demo-Daten. Ausgabe: samples/
  */
 import PDFDocument from 'pdfkit';
-import { createWriteStream, mkdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { once } from 'node:events';
 import path from 'node:path';
 import { formatMoneyPlain } from '@immo/shared';
 
@@ -33,7 +35,8 @@ const rows = txs.map((t) => {
 
 // ───── PDF ─────
 const doc = new PDFDocument({ size: 'A4', margin: 40 });
-doc.pipe(createWriteStream(path.join(out, 'kontoauszug-2026-09.pdf')));
+const pdfStream = createWriteStream(path.join(out, 'kontoauszug-2026-09.pdf'));
+doc.pipe(pdfStream);
 doc.font('Helvetica-Bold').fontSize(16).text('Zürcher Beispielbank AG', 40, 40);
 doc.font('Helvetica').fontSize(9).fillColor('#555').text('Bahnhofplatz 1, 8001 Zürich', 40, 60);
 doc.fillColor('#000').fontSize(12).font('Helvetica-Bold').text('Kontoauszug September 2026', 40, 95);
@@ -59,6 +62,26 @@ for (const r of rows) {
 doc.moveTo(40, y).lineTo(570, y).stroke();
 doc.font('Helvetica-Bold').text('Schlusssaldo', col.text, y + 6).text(formatMoneyPlain(saldo), col.saldo - 20, y + 6, { width: 70, align: 'right' });
 doc.end();
+await once(pdfStream, 'finish');
+
+// ───── Gescannter Ausdruck (Bild-PDF, leicht schräg) und Foto (JPG) ─────
+try {
+  const tmp = path.join(out, '.scan-tmp');
+  mkdirSync(tmp, { recursive: true });
+  execFileSync('pdftoppm', ['-r', '200', '-gray', '-png', '-singlefile', path.join(out, 'kontoauszug-2026-09.pdf'), path.join(tmp, 'page')]);
+  const scan = new PDFDocument({ size: 'A4', margin: 0 });
+  const scanStream = createWriteStream(path.join(out, 'kontoauszug-2026-09-scan.pdf'));
+  scan.pipe(scanStream);
+  scan.rect(0, 0, 595, 842).fill('#f4f4f1');
+  scan.save().rotate(0.7, { origin: [297, 421] }).image(readFileSync(path.join(tmp, 'page.png')), 6, 4, { width: 583 }).restore();
+  scan.end();
+  await once(scanStream, 'finish');
+  execFileSync('pdftoppm', ['-r', '150', '-jpeg', '-singlefile', path.join(out, 'kontoauszug-2026-09-scan.pdf'), path.join(out, 'kontoauszug-2026-09-foto')]);
+  rmSync(tmp, { recursive: true, force: true });
+} catch {
+  console.log('Hinweis: pdftoppm (poppler-utils) nicht installiert – Scan-Beispiele übersprungen.');
+}
+void existsSync;
 
 // ───── CSV (typischer Bank-Export) ─────
 const csv = [

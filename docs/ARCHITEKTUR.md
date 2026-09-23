@@ -63,6 +63,17 @@ Tabellen: `Organization, User, PropertyAccess, RefreshToken, Property, Unit, Ten
 7. **Duplikatschutz**: Fingerprint (Datum, Betrag, Zahler, Referenz) und Ähnlichkeitsprüfung (gleicher Vertrag, gleicher Betrag, ±5 Tage).
 8. **Sollstellungen ab Stichtag**: Bestehende Verträge erzeugen keine rückwirkenden Forderungen.
 
+## Einlesen von Kontoauszügen
+
+| Eingang | Verarbeitung |
+|---|---|
+| PDF mit Textebene | pdf.js liest Text **mit x-Positionen** → Spalten Belastung/Gutschrift/Saldo werden erkannt |
+| Eingescannter Ausdruck (PDF ohne Text) / Foto (JPG, PNG) | poppler rendert 300 dpi → Tesseract (Deutsch) liefert Wörter mit Positionen → gleiche Spaltenerkennung |
+| Eingefügter Text | Wortpositionen aus Zeichenabständen; Spalten nur bei ausgerichtetem Text, sonst Richtung über Saldo/Schlüsselwörter |
+| camt.053/054, CSV, Excel | strukturierte Parser |
+
+**Saldo-Kontrolle** (`verifyByBalance`): Saldo nach Buchung − Saldo davor muss ± Betrag ergeben. Stimmt die Rechnung, sind Betrag **und** Richtung unabhängig vom Layout bestätigt (✓). Abweichungen – z. B. Lesefehler der Texterkennung – werden markiert und können nie „bereit“ sein. Bei Scans/Fotos ist ohne Saldo-Bestätigung immer eine manuelle Prüfung nötig.
+
 ## Zahlungsautomatik (Matching-Engine)
 
 `apps/api/src/import/matching.ts` ist eine reine Funktion:

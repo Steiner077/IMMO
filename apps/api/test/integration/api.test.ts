@@ -170,6 +170,22 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(audit.total).toBeGreaterThan(0);
   });
 
+  it('eingefügter Kontoauszugstext wird analysiert und per Saldo geprüft', async () => {
+    const t = await login('verwaltung@immo.local');
+    const text = ["01.09.2026 Saldovortrag 10'000.00", "11.09.2026 Gutschrift 2'510.00 11.09.2026 12'510.00", 'Nicole Baumann', 'Mitteilung: Miete Juli'].join('\n');
+    const up = await app.inject({ method: 'POST', url: '/api/v1/imports/text', headers: { authorization: `Bearer ${t}` }, payload: { text } });
+    expect(up.statusCode, up.body).toBe(200);
+    let batch: { status: string; meta: { balanceCheck: { verified: number } }; rows: { payerName: string; balanceVerified: boolean; allocation: { period: string }[]; status: string }[] } | undefined;
+    for (let i = 0; i < 50; i++) {
+      batch = (await get(t, `/api/v1/imports/${up.json().id}`)).json();
+      if (batch!.status !== 'ANALYZING') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(batch!.meta.balanceCheck.verified).toBe(1);
+    expect(batch!.rows[0]).toMatchObject({ payerName: 'Nicole Baumann', balanceVerified: true, status: 'READY' });
+    expect(batch!.rows[0].allocation[0].period).toBe('2026-07');
+  });
+
   it('Stornierte Zahlung setzt den Monat wieder auf offen', async () => {
     const t = await login('verwaltung@immo.local');
     const auth = { authorization: `Bearer ${t}` };

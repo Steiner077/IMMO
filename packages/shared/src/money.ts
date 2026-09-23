@@ -57,8 +57,13 @@ export function parseMoneyToCents(input: string | number | null | undefined): nu
   } else if (lastDot >= 0) {
     const parts = s.split('.');
     const decimals = s.length - lastDot - 1;
-    // "1.850.000" oder "1.850" (deutsche Tausendertrennung)
-    if (parts.length > 2 || decimals === 3) s = s.replace(/\./g, '');
+    if (parts.length > 2 && decimals === 2) {
+      // "1.850.00" (Texterkennung/Tausenderpunkt): letzter Punkt ist Dezimaltrenner
+      s = parts.slice(0, -1).join('') + '.' + parts[parts.length - 1];
+    } else if (parts.length > 2 || decimals === 3) {
+      // "1.850.000" oder "1.850" (deutsche Tausendertrennung)
+      s = s.replace(/\./g, '');
+    }
   }
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   const [whole, frac = ''] = s.split('.');

@@ -81,6 +81,8 @@ enum PaymentSource {
   CSV_IMPORT
   EXCEL_IMPORT
   CAMT_IMPORT
+  SCAN_IMPORT
+  TEXT_IMPORT
   BANK_API
 }
 
@@ -89,6 +91,8 @@ enum ImportFileType {
   CSV
   XLSX
   CAMT
+  IMAGE
+  TEXT
 }
 
 enum ImportBatchStatus {
@@ -555,6 +559,8 @@ model ImportRow {
   payerIban         String?
   reference         String?
   rawText           String
+  /// Saldo-Kontrolle: true = bestätigt, false = Abweichung, null = nicht prüfbar
+  balanceVerified   Boolean?
   fingerprint       String
   suggestedTenantId String?
   suggestedLeaseId  String?

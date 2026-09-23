@@ -4,7 +4,8 @@ import { prisma, financialTx } from '../lib/prisma.js';
 import { storage } from '../lib/storage.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { extractPdfLines } from '../import/pdf.js';
-import { parseStatementLines } from '../import/statement-parser.js';
+import { parseStatementLines, parseStatementText } from '../import/statement-parser.js';
+import { ocrAvailable, ocrImage, ocrPdf } from '../import/ocr.js';
 import { parseCsvBuffer, parseXlsxBuffer } from '../import/table-parser.js';
 import { parseCamtBuffer } from '../import/camt-parser.js';
 import { matchTransaction, type MatchCandidate } from '../import/matching.js';
@@ -20,12 +21,36 @@ import type { AuthUser } from '../auth/context.js';
 import type { FastifyRequest } from 'fastify';
 import { logger } from '../lib/logger.js';
 
-export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer): Promise<ParseResult> {
+const OCR_HINT = 'Per Texterkennung (OCR) aus einem Scan/Foto gelesen – Beträge ohne Saldo-Bestätigung bitte besonders prüfen.';
+
+async function ocrOrExplain(read: () => Promise<import('../import/types.js').TextLine[]>, what: string): Promise<ParseResult> {
+  if (!(await ocrAvailable())) {
+    return { transactions: [], meta: { format: 'ocr-unavailable', warnings: [`${what} enthält keinen lesbaren Text und die Texterkennung ist auf diesem Server nicht installiert (tesseract, poppler-utils).`] } };
+  }
+  const res = parseStatementLines(await read());
+  res.meta.ocr = true;
+  res.meta.format = `ocr:${res.meta.format}`;
+  res.meta.warnings.unshift(OCR_HINT);
+  return res;
+}
+
+export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer, fileName = ''): Promise<ParseResult> {
   if (fileType === 'PDF') {
     const lines = await extractPdfLines(data);
     const res = parseStatementLines(lines);
-    if (lines.length === 0) res.meta.warnings.push('Das PDF enthält keinen Text (evtl. gescannt). Bitte CSV-Export der Bank verwenden.');
+    // Kein oder kaum Text: eingescannter Ausdruck → Texterkennung
+    if (lines.length < 5 || res.transactions.length === 0) {
+      const ocr = await ocrOrExplain(() => ocrPdf(data), 'Das PDF');
+      if (ocr.transactions.length || lines.length < 5) return ocr;
+    }
     return res;
+  }
+  if (fileType === 'IMAGE') return ocrOrExplain(() => ocrImage(data, (fileName.match(/\.\w+$/)?.[0] ?? '.png').toLowerCase()), 'Das Bild');
+  if (fileType === 'TEXT') {
+    const res = parseStatementText(data.toString('utf8'));
+    if (res.transactions.length) return res;
+    const csv = parseCsvBuffer(data); // .txt kann auch ein Tabellen-Export sein
+    return csv.transactions.length ? csv : res;
   }
   if (fileType === 'CSV') return parseCsvBuffer(data);
   if (fileType === 'CAMT') return parseCamtBuffer(data);
@@ -68,7 +93,7 @@ export async function analyzeBatch(batchId: string) {
   try {
     if (!batch.document) throw new Error('Importdatei fehlt');
     const data = await storage.get(batch.document.storageKey);
-    const parsed = await parseFile(batch.fileType, data);
+    const parsed = await parseFile(batch.fileType, data, batch.fileName);
     const settings = await getOrgSettings(batch.organizationId);
 
     // Sollstellungen bis zum Folgemonat sicherstellen (Vorauszahlungen)
@@ -114,6 +139,7 @@ export async function analyzeBatch(batchId: string) {
         payerIban: t.payerIban,
         reference: t.reference,
         rawText: t.rawText,
+        balanceVerified: t.verified ?? null,
         fingerprint: fp,
       };
       if (!t.isCredit) {
@@ -129,6 +155,16 @@ export async function analyzeBatch(batchId: string) {
         readyThreshold: settings.autoReadyThreshold,
         reviewThreshold: settings.reviewThreshold,
       });
+      if (t.verified) m.reasons.push('Betrag und Richtung durch Saldo-Kontrolle bestätigt');
+      if (t.verified === false) {
+        m.reasons.push('Betrag passt nicht zum Kontosaldo – bitte mit dem Auszug vergleichen');
+        if (m.status === 'READY') m.status = 'NEEDS_REVIEW';
+      }
+      // Gescannte Belege: ohne Saldo-Bestätigung nie automatisch "bereit"
+      if (parsed.meta.ocr && !t.verified && m.status === 'READY') {
+        m.status = 'NEEDS_REVIEW';
+        m.reasons.push('Per Texterkennung gelesen – Betrag bitte kontrollieren');
+      }
       // Mögliches Duplikat: gleicher Vertrag, gleicher Betrag, ±5 Tage bereits verbucht
       if (m.leaseId) {
         const near = recentByLease.get(m.leaseId)?.find(
@@ -306,7 +342,7 @@ export async function postBatch(batchId: string, user: AuthUser, req?: FastifyRe
   if (batch.status === 'ANALYZING') throw conflict('Der Import wird noch analysiert.');
   const rows = await prisma.importRow.findMany({ where: { batchId, confirmed: true, status: { not: 'POSTED' } }, orderBy: { rowIndex: 'asc' } });
   const results: { rowId: string; ok: boolean; paymentId?: string; error?: string }[] = [];
-  const source = ({ PDF: 'PDF_IMPORT', CSV: 'CSV_IMPORT', XLSX: 'EXCEL_IMPORT', CAMT: 'CAMT_IMPORT' } as const)[batch.fileType];
+  const source = ({ PDF: 'PDF_IMPORT', CSV: 'CSV_IMPORT', XLSX: 'EXCEL_IMPORT', CAMT: 'CAMT_IMPORT', IMAGE: 'SCAN_IMPORT', TEXT: 'TEXT_IMPORT' } as const)[batch.fileType];
 
   for (const row of rows) {
     try {

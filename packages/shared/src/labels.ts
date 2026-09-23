@@ -55,6 +55,8 @@ export const PAYMENT_SOURCES = {
   CSV_IMPORT: 'CSV-Import',
   EXCEL_IMPORT: 'Excel-Import',
   CAMT_IMPORT: 'Bank-XML (camt)',
+  SCAN_IMPORT: 'Scan / Foto (OCR)',
+  TEXT_IMPORT: 'Eingefügter Text',
   BANK_API: 'Bankschnittstelle',
 } as const;
 

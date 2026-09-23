@@ -13,7 +13,7 @@ import type { ParseResult, ParsedTransaction, TextLine } from './types.js';
  */
 
 const LINE_DATE_START = /^\s*(\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2}))\b/;
-const AMOUNT_TOKEN = /^-?\d{1,3}(?:['’ ]\d{3})*(?:[.,]\d{2})$|^-?\d+[.,]\d{2}$/;
+const AMOUNT_TOKEN = /^-?\d{1,3}(?:['’.,]\d{3})*(?:[.,]\d{2})$|^-?\d+[.,]\d{2}$|^-?\d{1,3}(?:['’]\d{3})+\.-$|^-?\d+\.-$/;
 const IBAN_RE = /\b([A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){3,7}(?:\s?[A-Z0-9]{1,3})?)\b/;
 const QR_REF_RE = /\b(\d{2}(?:\s?\d{5}){5})\b/;
 
@@ -25,6 +25,8 @@ const CREDIT_WORDS = /gutschrift|zahlungseingang|eingang|einzahlung|überweisung
 const DEBIT_WORDS = /belastung|lastschrift|zahlung an|dauerauftrag an|bezug|debit|e-banking auftrag|gebühr|gebuehr|kartenzahlung|abbuchung/i;
 const SKIP_LINE = /^(saldo|saldovortrag|kontostand|übertrag|uebertrag|total|summe|seite \d|page \d|anfangssaldo|schlusssaldo|endsaldo)/i;
 const PAYER_PREFIX = /^(gutschrift von|zahlung von|überweisung von|ueberweisung von|auftraggeber:?|von:?|absender:?|zahler:?|qr-zahlung von|einzahlung von)\s*/i;
+/** Buchungsarten am Zeilenanfang – sind nie der Name des Zahlers */
+const BOOKING_TYPE = /^(gutschrift|überweisung|ueberweisung|dauerauftrag|zahlungseingang|zahlung|lastschrift|belastung|einzahlung|e-banking-auftrag|e-banking|qr-zahlung|vergütung|verguetung|twint|bankomat|kartenzahlung|sammelgutschrift)\b\s*(von|an)?[:\s]*/i;
 const REF_PREFIX = /^(mitteilung:?|zahlungszweck:?|verwendungszweck:?|referenz:?|ref\.?:?|zusätzliche informationen:?|zusaetzliche informationen:?|info:?|bemerkung:?)\s*/i;
 
 interface Column {
@@ -35,10 +37,19 @@ interface Column {
 function detectColumns(lines: TextLine[]): Column[] | null {
   for (const line of lines) {
     const cols: Column[] = [];
+    // Überschriften wortweise auswerten (OCR/PDF fassen z. B. "Gutschrift Valuta" zusammen)
+    const words: { s: string; center: number }[] = [];
     for (const item of line.items) {
-      const s = item.str.trim().toLowerCase();
-      if (!s) continue;
-      const center = item.x + item.width / 2;
+      const str = item.str.trim();
+      if (!str) continue;
+      const charW = item.width / Math.max(1, str.length);
+      let offset = 0;
+      for (const part of str.split(/(\s+)/)) {
+        if (part.trim()) words.push({ s: part.toLowerCase(), center: item.x + (offset + part.length / 2) * charW });
+        offset += part.length;
+      }
+    }
+    for (const { s, center } of words) {
       if (CREDIT_HEADERS.some((h) => s === h || s.startsWith(h))) cols.push({ kind: 'credit', x: center });
       else if (DEBIT_HEADERS.some((h) => s === h || s.startsWith(h))) cols.push({ kind: 'debit', x: center });
       else if (BALANCE_HEADERS.some((h) => s === h || s.startsWith(h))) cols.push({ kind: 'balance', x: center });
@@ -64,9 +75,10 @@ function amountsInLine(line: TextLine): { cents: number; x: number }[] {
   }
   if (out.length === 0) {
     // Fallback: Beträge im Fliesstext (ohne Positionsinformation)
-    const re = /(-?\d{1,3}(?:['’]\d{3})+(?:\.\d{2})|-?\d+\.\d{2})(?!\d)/g;
+    const re = /(-?\d{1,3}(?:['’]\d{3})+(?:\.\d{2})|-?\d+\.\d{2})(?![\d.])/g;
+    const withoutDates = line.text.replace(/\b\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})\b/g, (d) => ' '.repeat(d.length));
     let m: RegExpExecArray | null;
-    while ((m = re.exec(line.text))) {
+    while ((m = re.exec(withoutDates))) {
       const cents = parseMoneyToCents(m[1]);
       if (cents !== null) out.push({ cents, x: m.index * 5 });
     }
@@ -89,7 +101,7 @@ export function extractDetails(blockLines: string[]): { payerName: string | null
   const candidates: string[] = [];
 
   for (const rawLine of blockLines) {
-    const line = rawLine.trim();
+    const line = rawLine.replace(/\s+/g, ' ').trim();
     if (!line) continue;
     const iban = line.match(IBAN_RE);
     if (iban && !payerIban) {
@@ -134,9 +146,17 @@ export function extractDetails(blockLines: string[]): { payerName: string | null
   };
 }
 
-export function parseStatementLines(lines: TextLine[]): ParseResult {
+export interface StatementOptions {
+  /** Spaltenpositionen verwenden (nur bei positionsgetreuem Text: PDF/OCR/ausgerichteter Text) */
+  trustColumns?: boolean;
+}
+
+const OPENING_BALANCE = /(saldovortrag|anfangssaldo|saldo per|saldo vortrag|übertrag|uebertrag|alter saldo|kontostand per)/i;
+
+export function parseStatementLines(lines: TextLine[], opts: StatementOptions = {}): ParseResult {
   const warnings: string[] = [];
-  const columns = detectColumns(lines);
+  const columns = opts.trustColumns === false ? null : detectColumns(lines);
+  let openingBalance: number | null = null;
   const transactions: ParsedTransaction[] = [];
 
   let current: { head: TextLine; details: string[]; amounts: { cents: number; x: number }[] } | null = null;
@@ -150,13 +170,23 @@ export function parseStatementLines(lines: TextLine[]): ParseResult {
     if (!bookingDate || amounts.length === 0) return;
     const headText = stripDatesAndAmounts(head.text);
     const allText = [headText, ...details].join('\n');
-    if (SKIP_LINE.test(headText)) return;
+    if (SKIP_LINE.test(headText) || OPENING_BALANCE.test(headText)) {
+      if (OPENING_BALANCE.test(headText) && openingBalance === null && transactions.length === 0) openingBalance = amounts[amounts.length - 1].cents;
+      return;
+    }
 
     const dates = head.text.match(/\b\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})\b/g) ?? [];
     const valueDate = dates.length > 1 ? parseDate(dates[dates.length - 1]) : null;
 
     let amountCents: number | null = null;
     let isCredit = true;
+    let balanceCents: number | null = null;
+    if (columns) {
+      const bal = amounts.find((a) => nearestColumn(columns, a.x).kind === 'balance');
+      if (bal) balanceCents = bal.cents;
+    } else if (amounts.length >= 2) {
+      balanceCents = amounts[amounts.length - 1].cents;
+    }
 
     if (columns) {
       const credit = amounts.find((a) => nearestColumn(columns, a.x).kind === 'credit');
@@ -179,12 +209,9 @@ export function parseStatementLines(lines: TextLine[]): ParseResult {
     }
     if (!amountCents) return;
 
-    const detailLines = [headText.replace(CREDIT_WORDS, '').trim(), ...details];
+    const headClean = headText.replace(BOOKING_TYPE, '').trim();
+    const detailLines = [headClean, ...details.map((l) => (BOOKING_TYPE.test(l.trim()) && l.trim().replace(BOOKING_TYPE, '') === '' ? '' : l))];
     const d = extractDetails(detailLines.filter(Boolean));
-    if (!d.payerName) {
-      const cleaned = headText.replace(/^(gutschrift|zahlungseingang|einzahlung|überweisung|qr-zahlung)\s*/i, '').trim();
-      if (cleaned && !CREDIT_WORDS.test(cleaned)) d.payerName = cleaned;
-    }
 
     transactions.push({
       bookingDate,
@@ -195,6 +222,7 @@ export function parseStatementLines(lines: TextLine[]): ParseResult {
       payerIban: d.payerIban,
       reference: d.reference,
       rawText: [head.text.trim(), ...details].join('\n').slice(0, 2000),
+      balanceCents,
     });
   };
 
@@ -226,6 +254,10 @@ export function parseStatementLines(lines: TextLine[]): ParseResult {
   }
   flush();
 
+  const balanceCheck = verifyByBalance(transactions, openingBalance);
+  if (balanceCheck.corrected) warnings.push(`Saldo-Kontrolle: Bei ${balanceCheck.corrected} Buchung(en) wurde die Richtung (Gutschrift/Belastung) anhand des Kontosaldos korrigiert.`);
+  if (balanceCheck.checked && balanceCheck.verified < balanceCheck.checked)
+    warnings.push(`Saldo-Kontrolle: ${balanceCheck.checked - balanceCheck.verified} Betrag/Beträge passen nicht zum Saldo – bitte besonders prüfen.`);
   if (!transactions.length) warnings.push('Im Dokument wurden keine Buchungen erkannt.');
   if (!columns) warnings.push('Keine Spalten Belastung/Gutschrift erkannt – Richtung wurde anhand des Buchungstextes bestimmt.');
 
@@ -237,19 +269,74 @@ export function parseStatementLines(lines: TextLine[]): ParseResult {
       iban: ibanLine ? ibanLine.text.match(IBAN_RE)![1].replace(/\s/g, '') : null,
       warnings,
       lineCount: lines.length,
+      balanceCheck: balanceCheck.checked ? balanceCheck : null,
     },
   };
 }
 
-/** Hilfsfunktion für reinen Text ohne Positionsangaben (z. B. Tests, .txt). */
-export function textToLines(text: string): TextLine[] {
-  return text.split(/\r?\n/).map((t, i) => {
-    const items: TextLine['items'] = [];
-    let x = 0;
-    for (const part of t.split(/(\s{2,})/)) {
-      if (part.trim()) items.push({ str: part.trim(), x, width: part.length });
-      x += part.length;
+/**
+ * Saldo-Kontrolle: Der Kontosaldo nach jeder Buchung muss dem vorherigen Saldo
+ * ± Betrag entsprechen. Stimmt die Rechnung, sind Betrag UND Richtung bestätigt –
+ * unabhängig vom Layout. Das deckt auch Lesefehler der Texterkennung auf.
+ */
+export function verifyByBalance(txs: ParsedTransaction[], opening: number | null) {
+  let prev = opening;
+  let verified = 0;
+  let checked = 0;
+  let corrected = 0;
+  for (const t of txs) {
+    const bal = t.balanceCents ?? null;
+    if (bal !== null && bal !== t.amountCents && prev !== null) {
+      checked++;
+      const diff = bal - prev;
+      if (Math.abs(diff) === t.amountCents) {
+        const credit = diff > 0;
+        if (credit !== t.isCredit) corrected++;
+        t.isCredit = credit;
+        t.verified = true;
+        verified++;
+      } else {
+        t.verified = false;
+      }
+      prev = bal;
+    } else if (bal !== null && bal !== t.amountCents) {
+      prev = bal;
+    } else if (prev !== null) {
+      prev = prev + (t.isCredit ? t.amountCents : -t.amountCents);
     }
-    return { page: 1, y: i, text: t, items };
-  });
+  }
+  return { verified, checked, corrected };
+}
+
+/**
+ * Wandelt reinen Text (eingefügt oder aus .txt) in Zeilen mit Wortpositionen um.
+ * Die Zeichenposition dient als x-Koordinate.
+ */
+export function textToLines(text: string): TextLine[] {
+  return text
+    .replace(/\t/g, '    ')
+    .split(/\r?\n/)
+    .map((t, i) => {
+      const items: TextLine['items'] = [];
+      const re = /\S+/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(t))) items.push({ str: m[0], x: m.index, width: m[0].length });
+      return { page: 1, y: i, text: t, items };
+    });
+}
+
+/** Ist der Text spaltengetreu ausgerichtet (mehrfache Leerzeichen/Tabs zwischen Spalten)? */
+export function looksAligned(text: string): boolean {
+  const lines = text.split(/\r?\n/).filter((l) => /\d/.test(l) && l.trim().length > 20);
+  if (lines.length < 3) return false;
+  const aligned = lines.filter((l) => /\S( {2,}|\t)\S/.test(l)).length;
+  return aligned / lines.length > 0.6;
+}
+
+/** Eingefügten Kontoauszugstext analysieren */
+export function parseStatementText(text: string): ParseResult {
+  const aligned = looksAligned(text);
+  const res = parseStatementLines(textToLines(text), { trustColumns: aligned });
+  if (!aligned) res.meta.format = 'text-pasted';
+  return res;
 }

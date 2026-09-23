@@ -7,6 +7,10 @@ export interface ParsedTransaction {
   payerIban: string | null;
   reference: string | null;
   rawText: string;
+  /** Laufender Kontosaldo nach der Buchung (falls im Auszug vorhanden) */
+  balanceCents?: number | null;
+  /** Betrag und Richtung durch Saldo-Differenz bestätigt */
+  verified?: boolean;
 }
 
 export interface TextItem {
@@ -32,5 +36,9 @@ export interface ParseResult {
     periodTo?: string | null;
     warnings: string[];
     lineCount?: number;
+    /** Text wurde per Texterkennung (OCR) gewonnen */
+    ocr?: boolean;
+    /** Saldo-Kontrolle: bestätigte / geprüfte Buchungen */
+    balanceCheck?: { verified: number; checked: number; corrected: number } | null;
   };
 }

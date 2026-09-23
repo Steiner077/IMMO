@@ -27,6 +27,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Texterkennung (OCR) installieren
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-deu poppler-utils
       - run: npm ci
       - run: npx prisma generate
         working-directory: apps/api

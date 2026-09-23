@@ -33,9 +33,11 @@ export async function importRoutes(app: FastifyInstance) {
     const fileType =
       file.mimetype === 'application/pdf' ? 'PDF'
       : file.mimetype === 'application/xml' ? (isCamt(file.buffer) ? 'CAMT' : null)
-      : file.mimetype === 'text/csv' || file.mimetype === 'text/plain' ? 'CSV'
-      : file.filename.toLowerCase().endsWith('.xlsx') ? 'XLSX' : null;
-    if (!fileType) throw badRequest('Unterstützt werden PDF, camt.053/054 (XML), CSV und Excel (.xlsx).');
+      : file.mimetype === 'text/plain' ? 'TEXT'
+      : file.mimetype === 'text/csv' ? 'CSV'
+      : file.filename.toLowerCase().endsWith('.xlsx') ? 'XLSX'
+      : ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype) ? 'IMAGE' : null;
+    if (!fileType) throw badRequest('Unterstützt werden PDF (auch gescannt), Fotos/Scans (JPG, PNG), camt.053/054 (XML), CSV und Excel (.xlsx).');
     const doc = await storeDocument(prisma, req.user.organizationId, file, {
       category: fileType === 'PDF' ? 'BANK_STATEMENT' : 'RECEIPT',
       description: 'Zahlungsimport',
@@ -46,6 +48,24 @@ export async function importRoutes(app: FastifyInstance) {
     });
     await auditReq(req, { action: 'import.upload', entityType: 'ImportBatch', entityId: batch.id, summary: `Zahlungsdatei "${file.filename}" hochgeladen` });
     // Analyse im Hintergrund, Frontend pollt den Status
+    setImmediate(() => void analyzeBatch(batch.id));
+    return batch;
+  });
+
+  /** Kontoauszug als Text einfügen (z. B. aus PDF oder E-Banking kopiert) */
+  app.post('/text', { preHandler: requirePermission('payment:import') }, async (req) => {
+    const body = parse(z.object({ text: z.string().trim().min(20, 'Bitte den Text des Kontoauszugs einfügen.').max(500_000), name: z.string().max(120).optional() }), req.body);
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
+    const fileName = `${body.name?.trim() || 'Eingefügter Kontoauszug'} ${stamp}.txt`.replace(/[^\w.\-äöüÄÖÜ ()]/g, '_');
+    const doc = await storeDocument(prisma, req.user.organizationId, { filename: fileName, mimetype: 'text/plain', buffer: Buffer.from(body.text, 'utf8') }, {
+      category: 'BANK_STATEMENT',
+      description: 'Eingefügter Kontoauszugstext',
+      uploadedById: req.user.id,
+    });
+    const batch = await prisma.importBatch.create({
+      data: { organizationId: req.user.organizationId, fileName, fileType: 'TEXT', documentId: doc.id, createdById: req.user.id },
+    });
+    await auditReq(req, { action: 'import.paste', entityType: 'ImportBatch', entityId: batch.id, summary: `Kontoauszugstext eingefügt (${body.text.length} Zeichen)` });
     setImmediate(() => void analyzeBatch(batch.id));
     return batch;
   });
