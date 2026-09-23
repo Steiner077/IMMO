@@ -6,7 +6,7 @@ import { idParam, optStr, pagination, parse } from '../lib/http.js';
 import { notFound } from '../lib/errors.js';
 import { propertyIdFilter, requirePermission, scopedPropertyId } from '../auth/context.js';
 import { createPayment, reassignPayment, reversePayment } from '../services/payments.js';
-import { allocate } from '../import/allocation.js';
+import { allocatePreferring } from '../import/allocation.js';
 
 const allocationSchema = z.array(z.object({ chargeId: z.string(), amountCents: z.coerce.number().int().positive() }));
 
@@ -88,13 +88,23 @@ export async function paymentRoutes(app: FastifyInstance) {
   /** Vorschlag für die Aufteilung (ohne zu speichern) */
   app.post('/suggest-allocation', { preHandler: requirePermission('finance:read') }, async (req) => {
     const body = parse(z.object({ leaseId: z.string(), amountCents: z.coerce.number().int().positive(), period: z.string().nullish() }), req.body);
-    const lease = await prisma.lease.findFirst({
-      where: { id: body.leaseId, unit: { property: { organizationId: req.user.organizationId } } },
-      include: { charges: { where: { status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } }, orderBy: { period: 'asc' } } },
-    });
+    const lease = await prisma.lease.findFirst({ where: { id: body.leaseId, unit: { property: { organizationId: req.user.organizationId } } } });
     if (!lease) throw notFound('Mietvertrag');
-    const open = lease.charges.map((c) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents }));
-    return { open, ...allocate(body.amountCents, open, body.period) };
+    // offene Monate aller Verträge des Mieters (z. B. Wohnung + Parkplatz); gewählter Vertrag zuerst
+    const charges = await prisma.rentCharge.findMany({
+      where: { lease: { tenantId: lease.tenantId, unit: { property: { organizationId: req.user.organizationId } } }, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } },
+      include: { lease: { select: { unit: { select: { label: true } } } } },
+      orderBy: { period: 'asc' },
+    });
+    const multi = new Set(charges.map((c) => c.leaseId)).size > 1;
+    const toOpen = (c: (typeof charges)[number]) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents, ...(multi ? { label: c.lease.unit.label } : {}) });
+    const open = charges
+      .sort((a, b) => a.period.localeCompare(b.period) || Number(a.leaseId !== lease.id) - Number(b.leaseId !== lease.id))
+      .map((c) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents, ...(multi ? { label: c.lease.unit.label } : {}) }));
+    return {
+      open,
+      ...allocatePreferring(body.amountCents, charges.filter((c) => c.leaseId === lease.id).map(toOpen), charges.filter((c) => c.leaseId !== lease.id).map(toOpen), body.period),
+    };
   });
 
   app.post('/', { preHandler: requirePermission('finance:write') }, async (req) => {

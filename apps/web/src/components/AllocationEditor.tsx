@@ -5,7 +5,7 @@ import { chf, formatPeriod, fromCents, tenantName, toCents } from '@/lib/format'
 import type { Lease } from '@/lib/types';
 import { Field, Input, Select } from './ui';
 
-export interface OpenCharge { id: string; period: string; outstandingCents: number }
+export interface OpenCharge { id: string; period: string; outstandingCents: number; label?: string }
 export interface AllocationValue { leaseId: string | null; allocations: { chargeId: string; amountCents: number }[] }
 
 /**
@@ -45,7 +45,7 @@ export function AllocationEditor({ amountCents, value, onChange, initialLeaseId,
           <Select value={leaseId} onChange={(e) => { setLeaseId(e.target.value); setAmounts({}); }} placeholder="– nicht zugeordnet –" options={(leases ?? []).map((l) => ({ value: l.id, label: `${tenantName(l.tenant)} · ${l.unit.property.name} ${l.unit.label}` }))} />
         </Field>
         <Field label="Beginnen mit Monat" hint="Standard: ältester offener Monat">
-          <Select value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="automatisch" options={(suggestion?.open ?? []).map((o) => ({ value: o.period, label: `${formatPeriod(o.period)} (offen ${chf(o.outstandingCents)})` }))} />
+          <Select value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="automatisch" options={[...new Map((suggestion?.open ?? []).map((o) => [o.period, { value: o.period, label: formatPeriod(o.period) }])).values()]} />
         </Field>
       </div>
       {leaseId && suggestion && (
@@ -55,7 +55,7 @@ export function AllocationEditor({ amountCents, value, onChange, initialLeaseId,
             <tbody>
               {suggestion.open.map((o) => (
                 <tr key={o.id}>
-                  <td>{formatPeriod(o.period)}</td>
+                  <td>{formatPeriod(o.period)}{o.label && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{o.label}</span>}</td>
                   <td className="num">{chf(o.outstandingCents)}</td>
                   <td className="num"><Input className="ml-auto w-32 text-right" value={amounts[o.id] ?? ''} inputMode="decimal" onChange={(e) => setAmounts({ ...amounts, [o.id]: e.target.value })} /></td>
                 </tr>

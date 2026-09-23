@@ -1,4 +1,4 @@
-import { AlertTriangle, Camera, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
+import { AlertTriangle, CalendarRange, Camera, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
 import { Fragment, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -109,7 +109,7 @@ export function ImportsPage() {
 
 interface Row {
   id: string; rowIndex: number; bookingDate: string; amountCents: number; isCredit: boolean; payerName: string | null; payerIban: string | null; reference: string | null; rawText: string;
-  suggestedLeaseId: string | null; suggestedPeriod: string | null; allocation: { chargeId: string; period: string; amountCents: number }[]; confidence: number; matchReasons: string[];
+  suggestedLeaseId: string | null; suggestedPeriod: string | null; allocation: { chargeId: string; period: string; amountCents: number; label?: string }[]; confidence: number; matchReasons: string[];
   status: string; confirmed: boolean; corrected: boolean; balanceVerified: boolean | null; tenant: TenantRef | null; unit: { id: string; label: string } | null; property: { id: string; name: string } | null; monthlyCents: number | null;
   payment: { id: string; number: number } | null;
 }
@@ -137,6 +137,7 @@ export function ImportDetailPage() {
   const confirmReady = useAction(() => api<{ confirmed: number }>(`/imports/${id}/confirm-ready`, { body: {} }), { success: (r) => `${r.confirmed} sichere Zahlungen bestätigt`, invalidate: [key] });
   const post = useAction(() => api<{ posted: number; failed: { rowId: string; error: string }[]; totalCents: number }>(`/imports/${id}/post`, { body: {} }), { invalidate: inv, onSuccess: setResult });
   const reanalyze = useAction(() => api(`/imports/${id}/reanalyze`, { body: {} }), { success: 'Analyse neu gestartet', invalidate: [key] });
+  const backfill = useAction(() => api<{ updated: number }>(`/imports/${id}/backfill-charges`, { body: {} }), { success: (r) => `Sollstellungen für ${r.updated} Verträge nachgetragen – Import neu zugeordnet`, invalidate: inv });
   const discard = useAction(() => api(`/imports/${id}/discard`, { body: {} }), { success: 'Import verworfen', invalidate: [['imports']], onSuccess: () => navigate('/zahlungen/import') });
 
   if (isLoading || !b) return <Loading />;
@@ -185,6 +186,23 @@ export function ImportDetailPage() {
         </div>
       )}
       {b.meta.warnings?.filter((w) => !w.startsWith('Saldo-Kontrolle: ') || !b.meta.balanceCheck).map((w) => <div key={w} className="mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><AlertTriangle className="h-4 w-4" />{w}</div>)}
+
+      {(() => {
+        const early = b.rows.filter((r) => r.status !== 'POSTED' && r.matchReasons.some((m) => m.startsWith('Zahlung liegt vor dem Abrechnungsbeginn')));
+        if (!early.length) return null;
+        const first = early.reduce((min, r) => (r.bookingDate < min ? r.bookingDate : min), early[0].bookingDate);
+        return (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <CalendarRange className="h-4 w-4 shrink-0" />
+            <p className="min-w-0 flex-1">
+              <b>Jahresauszug:</b> {early.length} Zahlungen liegen vor dem Abrechnungsbeginn der Verträge (ab {formatDate(first)}). Sollen die Monatsmieten für diese Monate nachgetragen und die Zahlungen den richtigen Monaten zugeordnet werden? (nie vor Mietbeginn)
+            </p>
+            {editable && can('lease:write') && !b.rows.some((r) => r.status === 'POSTED') && (
+              <Button size="sm" loading={backfill.isPending} onClick={() => backfill.mutate(undefined)}>Monate nachtragen</Button>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Zahlungseingänge" value={credits.length} sub={chf(credits.reduce((s, r) => s + r.amountCents, 0))} />
@@ -255,7 +273,8 @@ export function ImportDetailPage() {
                         {r.corrected && <Badge tone="purple" className="ml-1">korrigiert</Badge>}
                         {r.unit && <p className="text-xs whitespace-nowrap text-slate-500">{r.property?.name} · {r.unit.label}</p>}
                       </td>
-                      <td>{r.allocation.length ? r.allocation.map((a) => formatPeriod(a.period)).join(', ') : r.suggestedPeriod ? formatPeriod(r.suggestedPeriod) : '–'}</td>
+                      <td>{r.allocation.length ? [...new Set(r.allocation.map((a) => formatPeriod(a.period)))].join(', ') : r.suggestedPeriod ? formatPeriod(r.suggestedPeriod) : '–'}
+                        {new Set(r.allocation.map((a) => a.label)).size > 1 && <p className="text-xs text-slate-500">{r.allocation.map((a) => a.label).join(' + ')}</p>}</td>
                       <td>{r.isCredit && !['DUPLICATE', 'IGNORED'].includes(r.status) ? <ConfidenceBar value={r.confidence} /> : null}</td>
                       <td>{done && r.payment ? <Link to={`/zahlungen/${r.payment.id}`}><Badge tone="blue">Verbucht #{r.payment.number}</Badge></Link> : <ImportBadge status={r.status} />}</td>
                       <td className="whitespace-nowrap">
@@ -275,7 +294,7 @@ export function ImportDetailPage() {
                             <div>
                               <p className="mb-1 text-xs font-medium text-slate-500">Begründung der Automatik</p>
                               <ul className="list-disc space-y-0.5 pl-4 text-xs text-slate-700">{r.matchReasons.map((m, i) => <li key={i}>{m}</li>)}</ul>
-                              {r.allocation.length > 0 && <p className="mt-2 text-xs text-slate-600">Aufteilung: {r.allocation.map((a) => `${formatPeriod(a.period)} ${chf(a.amountCents)}`).join(' · ')}</p>}
+                              {r.allocation.length > 0 && <p className="mt-2 text-xs text-slate-600">Aufteilung: {r.allocation.map((a) => `${formatPeriod(a.period)}${a.label ? ` (${a.label})` : ''} ${chf(a.amountCents)}`).join(' · ')}</p>}
                               {r.monthlyCents !== null && <p className="mt-1 text-xs text-slate-600">Vertragliche Monatsmiete: {chf(r.monthlyCents)}</p>}
                             </div>
                             <div>

@@ -4,7 +4,7 @@ export interface UnitRef { id: string; label: string }
 
 export interface Property {
   id: string; name: string; street: string; zip: string; city: string; type: string; yearBuilt: number | null;
-  unitCount: number; occupiedCount: number; openDamages: number;
+  unitCount: number; occupiedCount: number; parkingCount?: number; parkingOccupiedCount?: number; openDamages: number;
   monthlyRentCents?: number; currentDueCents?: number; currentPaidCents?: number;
 }
 

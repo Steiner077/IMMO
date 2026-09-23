@@ -33,7 +33,11 @@ export interface MatchCandidate {
   paymentReference?: string | null;
   monthlyCents: number;
   openCharges: OpenCharge[];
+  /** Erster Monat mit Sollstellung (Abrechnungsbeginn im System) */
+  chargesStart?: string;
   aliases: { normalizedName: string; iban?: string | null; timesConfirmed: number }[];
+  /** Kombination mehrerer Verträge desselben Mieters (z. B. Wohnung + Parkplatz) */
+  combined?: string;
 }
 
 export interface MatchResult {
@@ -63,6 +67,8 @@ Object.assign(MONTHS, {
   january: 1, february: 2, march: 3, may: 5, june: 6, july: 7, october: 10, december: 12,
   janvier: 1, fevrier: 2, mars: 3, avril: 4, juin: 6, juillet: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12,
 });
+
+export const BEFORE_START = 'Zahlung liegt vor dem Abrechnungsbeginn des Vertrags';
 
 /** Erkennt Monatsangaben in der Zahlungsmitteilung. */
 export function detectPeriods(text: string, bookingDate: Date): string[] {
@@ -130,7 +136,7 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
   const digits = `${tx.reference ?? ''} ${tx.rawText ?? ''}`.replace(/\s/g, '');
   const namedPeriods = detectPeriods(`${tx.reference ?? ''} ${tx.rawText ?? ''}`, tx.bookingDate);
 
-  type Scored = { c: MatchCandidate; score: number; identity: number; reasons: string[]; period: string | null; amountOk: boolean };
+  type Scored = { c: MatchCandidate; score: number; identity: number; reasons: string[]; period: string | null; amountOk: boolean; open: MatchCandidate['openCharges'] };
   const scored: Scored[] = [];
 
   for (const c of candidates) {
@@ -179,7 +185,13 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
     }
 
     // 6. Betrag vergleichen und Monat bestimmen
-    const open = c.openCharges.filter((o) => o.outstandingCents > 0).sort((a, b) => a.period.localeCompare(b.period));
+    // Nur Monate bis max. einen Monat nach Buchungsdatum (Vorauszahlung) – ausser ausdrücklich genannt.
+    // Wichtig für Jahresauszüge: eine Januar-Zahlung darf nicht die September-Miete tilgen.
+    const allOpen = c.openCharges.filter((o) => o.outstandingCents > 0).sort((a, b) => a.period.localeCompare(b.period));
+    const latestAllowed = addMonths(toPeriod(tx.bookingDate), 1);
+    const open = allOpen.filter((o) => o.period <= latestAllowed || namedPeriods.includes(o.period));
+    const firstCharge = c.chargesStart;
+    const beforeStart = !!firstCharge && firstCharge > toPeriod(tx.bookingDate) && !open.length;
     let period: string | null = null;
     const named = namedPeriods.find((p) => open.some((o) => o.period === p));
     if (named) {
@@ -188,6 +200,9 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
       reasons.push(`Monat aus Mitteilung erkannt`);
     } else if (open.length) {
       period = open[0].period;
+    } else if (beforeStart) {
+      period = toPeriod(tx.bookingDate);
+      reasons.push(`${BEFORE_START} (erste Sollstellung ${firstCharge})`);
     } else {
       // Keine offenen Monate: Vorauszahlung für den Folgemonat
       const bookingPeriod = toPeriod(tx.bookingDate);
@@ -202,9 +217,9 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
       amountOk = true;
       reasons.push('Betrag entspricht exakt dem offenen Sollbetrag');
     } else if (tx.amountCents === c.monthlyCents) {
-      score += 26;
+      score += c.combined ? 27 : 26;
       amountOk = true;
-      reasons.push('Betrag entspricht der vertraglichen Monatsmiete');
+      reasons.push(c.combined ? `Betrag entspricht der Monatsmiete aller Verträge (${c.combined})` : 'Betrag entspricht der vertraglichen Monatsmiete');
     } else {
       // mehrere Monate auf einmal?
       let sum = 0;
@@ -232,7 +247,7 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
         }
       }
     }
-    scored.push({ c, score, identity, reasons, period, amountOk });
+    scored.push({ c, score, identity, reasons, period, amountOk, open });
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -259,7 +274,7 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
     reasons.push('Mehrdeutig: weitere Mieter kommen in Frage');
   }
 
-  const { lines, remainderCents } = allocate(tx.amountCents, best.c.openCharges, best.period);
+  const { lines, remainderCents } = allocate(tx.amountCents, best.open, best.period);
   let status: MatchResult['status'] = confidence >= ready && best.amountOk ? 'READY' : confidence >= review ? 'NEEDS_REVIEW' : 'UNMATCHED';
   if (status === 'READY' && remainderCents > 0) status = 'NEEDS_REVIEW';
 
@@ -275,3 +290,6 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
     alternatives: scored.slice(1, 4).map((s) => ({ tenantId: s.c.tenantId, leaseId: s.c.leaseId, score: Math.min(99, s.score) })),
   };
 }
+
+/** Die Allokationszeilen dürfen Sollstellungen mehrerer Verträge desselben Mieters betreffen. */
+export type { AllocationLine } from './allocation.js';

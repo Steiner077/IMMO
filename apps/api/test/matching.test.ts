@@ -110,3 +110,48 @@ describe('chargeStatus', () => {
     expect(chargeStatus(amount, paid, due, now)).toBe(expected);
   });
 });
+
+describe('Sammelzahlung Wohnung + Parkplatz', () => {
+  const apt = base({ tenantId: 'tb', leaseId: 'l-apt', firstName: 'Thomas', lastName: 'Brunner', unitLabel: '1B', monthlyCents: 155000, openCharges: [{ id: 'a10', period: '2026-10', outstandingCents: 155000, label: '1B' }] });
+  const pp = base({ tenantId: 'tb', leaseId: 'l-pp', firstName: 'Thomas', lastName: 'Brunner', unitLabel: 'PP1', monthlyCents: 12000, openCharges: [{ id: 'p10', period: '2026-10', outstandingCents: 12000, label: 'PP1' }] });
+  const both = { ...apt, combined: '1B + PP1', monthlyCents: 167000, openCharges: [...apt.openCharges, ...pp.openCharges] };
+
+  it('verteilt eine Gesamtzahlung auf beide Verträge', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2026, 8, 28)), amountCents: 167000, payerName: 'Thomas Brunner', reference: 'Miete Oktober' }, [apt, pp, both]);
+    expect(r.status).toBe('READY');
+    expect(r.remainderCents).toBe(0);
+    expect(r.allocation.map((a) => [a.label, a.amountCents]).sort()).toEqual([['1B', 155000], ['PP1', 12000]]);
+    expect(r.reasons.join(' ')).toContain('1B + PP1');
+  });
+
+  it('eine reine Parkplatzzahlung geht nur auf den Parkplatz', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2026, 8, 28)), amountCents: 12000, payerName: 'Thomas Brunner' }, [apt, pp, both]);
+    expect(r.leaseId).toBe('l-pp');
+    expect(r.allocation).toEqual([{ chargeId: 'p10', period: '2026-10', amountCents: 12000, label: 'PP1' }]);
+  });
+});
+
+describe('Jahresauszug', () => {
+  const lena = base({ tenantId: 't9', leaseId: 'l9', firstName: 'Lena', lastName: 'Wyss', monthlyCents: 12000, chargesStart: '2026-09', openCharges: [
+    { id: 'w9', period: '2026-09', outstandingCents: 12000 },
+    { id: 'w10', period: '2026-10', outstandingCents: 12000 },
+  ] });
+
+  it('Januar-Zahlung tilgt nicht die September-Miete, wenn die Abrechnung erst im September beginnt', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2026, 0, 3)), amountCents: 12000, payerName: 'Lena Wyss', reference: 'Parkplatz' }, [lena]);
+    expect(r.tenantId).toBe('t9');
+    expect(r.allocation).toEqual([]);
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.reasons.some((x) => x.startsWith('Zahlung liegt vor dem Abrechnungsbeginn'))).toBe(true);
+  });
+
+  it('Vorauszahlung Ende Monat für den Folgemonat bleibt erlaubt', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2026, 7, 28)), amountCents: 12000, payerName: 'Lena Wyss', reference: 'Parkplatz' }, [lena]);
+    expect(r.allocation).toEqual([{ chargeId: 'w9', period: '2026-09', amountCents: 12000 }]);
+  });
+
+  it('ausdrücklich genannter Monat darf auch weiter in der Zukunft liegen', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2026, 7, 3)), amountCents: 12000, payerName: 'Lena Wyss', reference: 'Parkplatz Oktober 2026' }, [lena]);
+    expect(r.allocation[0].period).toBe('2026-10');
+  });
+});

@@ -55,11 +55,13 @@ async function validateAllocations(tx: Tx, leaseId: string | null | undefined, a
   if (total > amountCents) throw badRequest('Die Zuordnung übersteigt den Zahlungsbetrag.');
   if (!allocations.length) return [];
   if (!leaseId) throw badRequest('Für eine Zuordnung muss ein Mietvertrag gewählt sein.');
-  const charges = await tx.rentCharge.findMany({ where: { id: { in: allocations.map((a) => a.chargeId) } } });
+  const lease = await tx.lease.findUniqueOrThrow({ where: { id: leaseId }, select: { tenantId: true } });
+  const charges = await tx.rentCharge.findMany({ where: { id: { in: allocations.map((a) => a.chargeId) } }, include: { lease: { select: { tenantId: true } } } });
   for (const a of allocations) {
     const c = charges.find((x) => x.id === a.chargeId);
     if (!c) throw badRequest('Sollstellung nicht gefunden.');
-    if (c.leaseId !== leaseId) throw badRequest('Sollstellung gehört nicht zum gewählten Mietvertrag.');
+    // erlaubt: alle Verträge desselben Mieters (z. B. Wohnung + Parkplatz in einer Zahlung)
+    if (c.lease.tenantId !== lease.tenantId) throw badRequest('Sollstellung gehört nicht zu diesem Mieter.');
   }
   return charges;
 }
@@ -147,8 +149,8 @@ export async function refreshPaymentStatus(tx: Db, paymentId: string): Promise<P
   if (p.reversedAt) return 'REVERSED';
   const assigned = p.assignments.reduce((s, a) => s + a.amountCents, 0);
   let hasOpen = false;
-  if (p.leaseId) {
-    hasOpen = (await tx.rentCharge.count({ where: { leaseId: p.leaseId, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } } })) > 0;
+  if (p.leaseId && p.tenantId) {
+    hasOpen = (await tx.rentCharge.count({ where: { lease: { tenantId: p.tenantId }, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } } })) > 0;
   }
   const status = derivePaymentStatus(p.amountCents, assigned, !!p.leaseId, hasOpen);
   if (status !== p.status) await tx.payment.update({ where: { id: p.id }, data: { status } });

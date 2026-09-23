@@ -2,12 +2,15 @@ export interface OpenCharge {
   id: string;
   period: string;
   outstandingCents: number;
+  /** Bezeichnung des Mietobjekts (bei mehreren Verträgen, z. B. "PP1") */
+  label?: string;
 }
 
 export interface AllocationLine {
   chargeId: string;
   period: string;
   amountCents: number;
+  label?: string;
 }
 
 /**
@@ -31,7 +34,7 @@ export function allocate(
   for (const c of ordered) {
     if (remaining <= 0) break;
     const part = Math.min(remaining, c.outstandingCents);
-    lines.push({ chargeId: c.id, period: c.period, amountCents: part });
+    lines.push({ chargeId: c.id, period: c.period, amountCents: part, ...(c.label ? { label: c.label } : {}) });
     remaining -= part;
   }
   return { lines, remainderCents: remaining };
@@ -51,4 +54,14 @@ export function chargeStatus(
   if (paidCents > 0) return 'PARTIAL';
   const overdueAt = new Date(dueDate.getTime() + graceDays * 86400000);
   return now > overdueAt ? 'OVERDUE' : 'OPEN';
+}
+
+/**
+ * Verteilt zuerst auf die Monate des bevorzugten Vertrags, ein Rest geht auf
+ * weitere Verträge desselben Mieters (z. B. Parkplatz).
+ */
+export function allocatePreferring(amountCents: number, preferred: OpenCharge[], others: OpenCharge[], startPeriod?: string | null) {
+  const first = allocate(amountCents, preferred, startPeriod);
+  const second = allocate(first.remainderCents, others, startPeriod);
+  return { lines: [...first.lines, ...second.lines], remainderCents: second.remainderCents };
 }

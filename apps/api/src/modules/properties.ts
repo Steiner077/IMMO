@@ -30,6 +30,8 @@ const unitSchema = z.object({
   description: optStr,
 });
 
+const PARKING_TYPES = new Set(['PARKING', 'GARAGE']);
+
 export async function propertyRoutes(app: FastifyInstance) {
   app.get('/properties', { preHandler: requirePermission('property:read') }, async (req) => {
     const q = parse(z.object({ archived: z.coerce.boolean().default(false) }), req.query);
@@ -39,7 +41,7 @@ export async function propertyRoutes(app: FastifyInstance) {
       include: {
         units: {
           where: { archivedAt: null },
-          include: { leases: { where: { status: { in: ['ACTIVE', 'TERMINATED'] } }, select: { id: true, netRentCents: true, utilitiesCents: true } } },
+          select: { type: true, leases: { where: { status: { in: ['ACTIVE', 'TERMINATED'] } }, select: { id: true, netRentCents: true, utilitiesCents: true } } },
         },
         _count: { select: { damageReports: { where: { status: { in: ['NEW', 'ACKNOWLEDGED', 'IN_PROGRESS', 'WAITING'] } } } } },
       },
@@ -66,6 +68,8 @@ export async function propertyRoutes(app: FastifyInstance) {
         yearBuilt: p.yearBuilt,
         unitCount: p.units.length,
         occupiedCount: p.units.filter((u) => u.leases.length > 0).length,
+        parkingCount: p.units.filter((u) => PARKING_TYPES.has(u.type)).length,
+        parkingOccupiedCount: p.units.filter((u) => PARKING_TYPES.has(u.type) && u.leases.length > 0).length,
         openDamages: p._count.damageReports,
         ...(showFinance
           ? {
@@ -170,6 +174,40 @@ export async function propertyRoutes(app: FastifyInstance) {
     const u = await prisma.unit.create({ data: { ...body, propertyId: id } });
     await auditReq(req, { action: 'unit.create', entityType: 'Unit', entityId: u.id, summary: `Mietobjekt ${u.label} in ${property.name} angelegt`, newValues: body });
     return u;
+  });
+
+  // Mehrere gleichartige Objekte (z. B. Parkplätze PP1–PP20) in einem Schritt anlegen.
+  app.post('/properties/:id/units/bulk', { preHandler: requirePermission('unit:write') }, async (req) => {
+    const { id } = parse(idParam, req.params);
+    assertPropertyAccess(req.user, id);
+    const property = await prisma.property.findFirst({ where: { id, organizationId: req.user.organizationId } });
+    if (!property) throw notFound('Immobilie');
+    const body = parse(
+      z.object({
+        prefix: z.string().trim().max(20).default(''),
+        from: z.coerce.number().int().min(0).max(9999),
+        to: z.coerce.number().int().min(0).max(9999),
+        type: z.enum(['PARKING', 'GARAGE', 'STORAGE', 'APARTMENT', 'OTHER']),
+        floor: optStr,
+        targetRentCents: z.coerce.number().int().nullish(),
+      }).refine((b) => b.to >= b.from && b.to - b.from < 200, { message: 'Bereich ungültig (max. 200 Objekte)' }),
+      req.body,
+    );
+    const labels = Array.from({ length: body.to - body.from + 1 }, (_, i) => `${body.prefix}${body.from + i}`);
+    const existing = await prisma.unit.findMany({ where: { propertyId: id, label: { in: labels }, archivedAt: null }, select: { label: true } });
+    const skip = new Set(existing.map((e) => e.label));
+    const toCreate = labels.filter((l) => !skip.has(l));
+    await prisma.unit.createMany({
+      data: toCreate.map((label) => ({ propertyId: id, label, type: body.type, floor: body.floor ?? null, targetRentCents: body.targetRentCents ?? null })),
+    });
+    await auditReq(req, {
+      action: 'unit.bulk_create',
+      entityType: 'Property',
+      entityId: id,
+      summary: `${toCreate.length} Mietobjekte (${labels[0]}–${labels[labels.length - 1]}) in ${property.name} angelegt`,
+      newValues: { ...body, created: toCreate },
+    });
+    return { created: toCreate.length, skipped: [...skip] };
   });
 
   app.get('/units/:id', { preHandler: requirePermission('unit:read') }, async (req) => {

@@ -186,6 +186,78 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(batch!.rows[0].allocation[0].period).toBe('2026-07');
   });
 
+  it('Sammelzahlung Wohnung + Parkplatz wird auf beide Verträge verteilt und verbucht', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const text = ["27.09.2026 Saldovortrag 5'000.00", "28.09.2026 Gutschrift 1'670.00 28.09.2026 6'670.00", 'Thomas Brunner', 'Mitteilung: Miete Oktober inkl. Parkplatz'].join('\n');
+    const up = await app.inject({ method: 'POST', url: '/api/v1/imports/text', headers: auth, payload: { text } });
+    let batch: { id: string; status: string; rows: { id: string; status: string; allocation: { period: string; amountCents: number; label?: string }[] }[] } | undefined;
+    for (let i = 0; i < 50; i++) {
+      batch = (await get(t, `/api/v1/imports/${up.json().id}`)).json();
+      if (batch!.status !== 'ANALYZING') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const row = batch!.rows[0];
+    expect(row.status).toBe('READY');
+    expect(row.allocation.map((a) => [a.label, a.amountCents]).sort()).toEqual([['1B', 155000], ['PP1', 12000]]);
+    await app.inject({ method: 'POST', url: `/api/v1/imports/${batch!.id}/confirm-ready`, headers: auth, payload: {} });
+    const posted = (await app.inject({ method: 'POST', url: `/api/v1/imports/${batch!.id}/post`, headers: auth, payload: {} })).json();
+    expect(posted.failed).toEqual([]);
+    const oct = (await get(t, '/api/v1/monthly/2026-10')).json();
+    const brunner = oct.rows.filter((r: { tenant: { lastName: string } }) => r.tenant.lastName === 'Brunner');
+    expect(brunner).toHaveLength(2);
+    expect(brunner.every((r: { status: string }) => r.status === 'PAID')).toBe(true);
+  });
+
+  it('Jahresauszug: Parkplätze in Serie anlegen, frühere Monate nachtragen und korrekt zuordnen', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const props = (await get(t, '/api/v1/properties')).json();
+    const propertyId = props[0].id;
+    const bulk = await app.inject({ method: 'POST', url: `/api/v1/properties/${propertyId}/units/bulk`, headers: auth, payload: { prefix: 'TG', from: 1, to: 5, type: 'PARKING', targetRentCents: 12000 } });
+    expect(bulk.json()).toEqual({ created: 5, skipped: [] });
+    const again = await app.inject({ method: 'POST', url: `/api/v1/properties/${propertyId}/units/bulk`, headers: auth, payload: { prefix: 'TG', from: 4, to: 6, type: 'PARKING' } });
+    expect(again.json()).toEqual({ created: 1, skipped: expect.arrayContaining(['TG4', 'TG5']) });
+    const list = (await get(t, '/api/v1/properties')).json();
+    expect(list[0].parkingCount).toBeGreaterThanOrEqual(6);
+
+    const unit = (await get(t, `/api/v1/units?propertyId=${propertyId}`)).json().find((u: { label: string }) => u.label === 'TG3');
+    const tenant = (await app.inject({ method: 'POST', url: '/api/v1/tenants', headers: auth, payload: { firstName: 'Lena', lastName: 'Wyss' } })).json();
+    const lease = await app.inject({ method: 'POST', url: '/api/v1/leases', headers: auth, payload: { unitId: unit.id, tenantId: tenant.id, startDate: '2025-06-01', netRentCents: 12000 } });
+    expect(lease.statusCode).toBe(200);
+
+    let saldo = 100000;
+    const lines = ["31.12.2025 Saldovortrag 1'000.00"];
+    for (let m = 1; m <= 6; m++) {
+      saldo += 12000;
+      const d = `02.${String(m).padStart(2, '0')}.2026`;
+      lines.push(`${d} Gutschrift 120.00 ${d} ${(saldo / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, "'")}`, 'Lena Wyss', 'Mitteilung: Parkplatz TG3');
+    }
+    const up = await app.inject({ method: 'POST', url: '/api/v1/imports/text', headers: auth, payload: { text: lines.join('\n') } });
+    type B = { id: string; status: string; rows: { status: string; matchReasons: string[]; allocation: { period: string; amountCents: number }[] }[] };
+    const wait = async (id: string) => {
+      let b: B | undefined;
+      for (let i = 0; i < 50; i++) {
+        b = (await get(t, `/api/v1/imports/${id}`)).json();
+        if (b!.status !== 'ANALYZING') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return b!;
+    };
+    let batch = await wait(up.json().id);
+    expect(batch.rows).toHaveLength(6);
+    expect(batch.rows.every((r) => r.allocation.length === 0 && r.matchReasons.some((x) => x.startsWith('Zahlung liegt vor dem Abrechnungsbeginn')))).toBe(true);
+
+    const bf = await app.inject({ method: 'POST', url: `/api/v1/imports/${batch.id}/backfill-charges`, headers: auth, payload: {} });
+    expect(bf.json()).toEqual({ updated: 1 });
+    batch = await wait(batch.id);
+    expect(batch.rows.map((r) => r.status)).toEqual(Array(6).fill('READY'));
+    expect(batch.rows.map((r) => r.allocation.map((a) => a.period).join())).toEqual(['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']);
+    // Monate vor dem Auszug bleiben unberührt (keine künstlichen Rückstände)
+    const dec = (await get(t, '/api/v1/monthly/2025-12')).json();
+    expect(dec.rows.some((r: { tenant: { lastName: string } }) => r.tenant.lastName === 'Wyss')).toBe(false);
+  });
+
   it('Stornierte Zahlung setzt den Monat wieder auf offen', async () => {
     const t = await login('verwaltung@immo.local');
     const auth = { authorization: `Bearer ${t}` };

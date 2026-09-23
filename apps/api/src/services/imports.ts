@@ -9,7 +9,7 @@ import { ocrAvailable, ocrImage, ocrPdf } from '../import/ocr.js';
 import { parseCsvBuffer, parseXlsxBuffer } from '../import/table-parser.js';
 import { parseCamtBuffer } from '../import/camt-parser.js';
 import { matchTransaction, type MatchCandidate } from '../import/matching.js';
-import { allocate, type AllocationLine } from '../import/allocation.js';
+import { allocatePreferring, type AllocationLine } from '../import/allocation.js';
 import type { ParseResult } from '../import/types.js';
 import { ensureChargesForOrganization } from './charges.js';
 import { createPayment, paymentFingerprint } from './payments.js';
@@ -67,7 +67,7 @@ export async function loadCandidates(organizationId: string): Promise<MatchCandi
       charges: { where: { status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } }, orderBy: { period: 'asc' } },
     },
   });
-  return leases
+  const single: MatchCandidate[] = leases
     .filter((l) => l.status !== 'ENDED' || l.charges.length > 0)
     .map((l) => ({
       tenantId: l.tenantId,
@@ -80,11 +80,32 @@ export async function loadCandidates(organizationId: string): Promise<MatchCandi
       propertyName: l.unit.property.name,
       paymentReference: l.paymentReference,
       monthlyCents: l.netRentCents + l.utilitiesCents,
-      openCharges: l.charges.map((c) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents })),
+      openCharges: l.charges.map((c) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents, label: l.unit.label })),
+      chargesStart: toPeriod(l.chargesFrom && l.chargesFrom > l.startDate ? l.chargesFrom : l.startDate),
       aliases: l.tenant.payerAliases
         .filter((a) => !a.leaseId || a.leaseId === l.id)
         .map((a) => ({ normalizedName: a.normalizedName, iban: a.iban, timesConfirmed: a.timesConfirmed })),
     }));
+
+  // Mieter mit mehreren laufenden Verträgen (Wohnung + Parkplatz/Garage): Sammelzahlung als eigener Kandidat
+  const SECONDARY = ['PARKING', 'GARAGE', 'STORAGE'];
+  const byTenant = new Map<string, typeof leases>();
+  for (const l of leases.filter((x) => x.status !== 'ENDED')) byTenant.set(l.tenantId, [...(byTenant.get(l.tenantId) ?? []), l]);
+  const combined: MatchCandidate[] = [];
+  for (const group of byTenant.values()) {
+    if (group.length < 2) continue;
+    const primary = [...group].sort((a, b) => Number(SECONDARY.includes(a.unit.type)) - Number(SECONDARY.includes(b.unit.type)) || b.netRentCents - a.netRentCents)[0];
+    const base = single.find((c) => c.leaseId === primary.id)!;
+    combined.push({
+      ...base,
+      combined: group.map((l) => l.unit.label).join(' + '),
+      monthlyCents: group.reduce((s, l) => s + l.netRentCents + l.utilitiesCents, 0),
+      openCharges: group.flatMap((l) => l.charges.map((c) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents, label: l.unit.label }))),
+      paymentReference: base.paymentReference,
+      aliases: [...new Map(group.flatMap((l) => l.tenant.payerAliases).map((a) => [a.id, { normalizedName: a.normalizedName, iban: a.iban, timesConfirmed: a.timesConfirmed }])).values()],
+    });
+  }
+  return [...single, ...combined];
 }
 
 /** Analysiert einen Import: Datei parsen → Buchungen erkennen → Mieter zuordnen → Vorschau erzeugen. */
@@ -177,10 +198,12 @@ export async function analyzeBatch(batchId: string) {
       }
       // Offene Beträge virtuell reduzieren, damit mehrere Zahlungen im selben Import korrekt verteilt werden
       if (m.leaseId) {
-        const cand = candidates.find((c) => c.leaseId === m.leaseId)!;
+        // dieselbe Sollstellung kann in mehreren Kandidaten vorkommen (Einzel- und Sammelkandidat)
         for (const a of m.allocation) {
-          const oc = cand.openCharges.find((o) => o.id === a.chargeId);
-          if (oc) oc.outstandingCents -= a.amountCents;
+          for (const cand of candidates) {
+            const oc = cand.openCharges.find((o) => o.id === a.chargeId);
+            if (oc) oc.outstandingCents -= a.amountCents;
+          }
         }
       }
       rows.push({
@@ -256,11 +279,15 @@ export async function updateImportRow(rowId: string, input: RowUpdate, user: Aut
       if (!lease) throw notFound('Mietvertrag');
       const period = input.period !== undefined ? input.period : leaseChanged ? null : row.suggestedPeriod;
       if (period) await ensureChargesForOrganization(user.organizationId, period);
-      const open = (await prisma.rentCharge.findMany({ where: { leaseId, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } } })).map((c) => ({
-        id: c.id,
-        period: c.period,
-        outstandingCents: c.amountCents - c.paidCents,
-      }));
+      const open = (
+        await prisma.rentCharge.findMany({
+          where: { lease: { tenantId: lease.tenantId, unit: { property: { organizationId: user.organizationId } } }, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } },
+          include: { lease: { select: { id: true, unit: { select: { label: true } } } } },
+        })
+      )
+        // Monate des gewählten Vertrags zuerst vorschlagen
+        .sort((a, b) => Number(a.leaseId !== leaseId) - Number(b.leaseId !== leaseId))
+        .map((c) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents, label: c.lease.unit.label }));
       let allocation: AllocationLine[];
       if (input.allocation) {
         const total = input.allocation.reduce((s, a) => s + a.amountCents, 0);
@@ -269,10 +296,11 @@ export async function updateImportRow(rowId: string, input: RowUpdate, user: Aut
           const c = open.find((o) => o.id === a.chargeId);
           if (!c) throw badRequest('Monat ist nicht offen oder gehört nicht zum Vertrag.');
           if (a.amountCents > c.outstandingCents) throw badRequest(`Betrag für ${c.period} übersteigt den offenen Betrag.`);
-          return { chargeId: c.id, period: c.period, amountCents: a.amountCents };
+          return { chargeId: c.id, period: c.period, amountCents: a.amountCents, label: c.label };
         });
       } else {
-        allocation = allocate(row.amountCents, open, period).lines;
+        const ownIds = new Set((await prisma.rentCharge.findMany({ where: { leaseId, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } }, select: { id: true } })).map((c) => c.id));
+        allocation = allocatePreferring(row.amountCents, open.filter((o) => ownIds.has(o.id)), open.filter((o) => !ownIds.has(o.id)), period).lines;
       }
       Object.assign(data, {
         suggestedLeaseId: lease.id,
@@ -350,8 +378,8 @@ export async function postBatch(batchId: string, user: AuthUser, req?: FastifyRe
       const payment = await financialTx(async (tx) => {
         // Sicherheitsprüfung: Hat sich der offene Betrag seit der Analyse verändert?
         for (const a of planned) {
-          const c = await tx.rentCharge.findUnique({ where: { id: a.chargeId } });
-          if (!c || c.leaseId !== row.suggestedLeaseId) throw badRequest('Sollstellung passt nicht mehr zum Vertrag.');
+          const c = await tx.rentCharge.findUnique({ where: { id: a.chargeId }, include: { lease: { select: { tenantId: true } } } });
+          if (!c || c.lease.tenantId !== row.suggestedTenantId) throw badRequest('Sollstellung passt nicht mehr zum Mieter.');
           if (a.amountCents > c.amountCents - c.paidCents)
             throw badRequest(`Der offene Betrag für ${a.period} hat sich seit der Analyse verändert – bitte Zeile erneut prüfen.`);
         }

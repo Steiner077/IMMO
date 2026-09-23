@@ -1,4 +1,4 @@
-import { Building2, MapPin, Pencil, Plus } from 'lucide-react';
+import { Building2, Car, MapPin, Pencil, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -30,7 +30,10 @@ export function PropertiesPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {data.map((p) => {
-            const occ = p.unitCount ? Math.round((p.occupiedCount / p.unitCount) * 100) : 0;
+            const park = p.parkingCount ?? 0;
+            const living = p.unitCount - park;
+            const livingOcc = p.occupiedCount - (p.parkingOccupiedCount ?? 0);
+            const occ = living ? Math.round((livingOcc / living) * 100) : 0;
             const paid = p.currentDueCents ? Math.round(((p.currentPaidCents ?? 0) / p.currentDueCents) * 100) : null;
             return (
               <Link key={p.id} to={`/immobilien/${p.id}`} className="card group block p-5 transition hover:border-slate-300 hover:shadow-sm">
@@ -48,8 +51,9 @@ export function PropertiesPage() {
                   <div>
                     <p className="text-slate-500">Belegung</p>
                     <p className="mt-0.5 font-semibold text-slate-800">
-                      {p.occupiedCount}/{p.unitCount} <span className="font-normal text-slate-500">({occ} %)</span>
+                      {livingOcc}/{living} <span className="font-normal text-slate-500">({occ} %)</span>
                     </p>
+                    {park > 0 && <p className="mt-0.5 text-slate-500">PP/Garagen {p.parkingOccupiedCount ?? 0}/{park}</p>}
                   </div>
                   {p.monthlyRentCents !== undefined && (
                     <div>
@@ -117,6 +121,35 @@ function PropertyForm({ open, onClose, initial }: { open: boolean; onClose: () =
   );
 }
 
+const PARKING = new Set(['PARKING', 'GARAGE']);
+
+function BulkUnitForm({ propertyId, onClose }: { propertyId: string; onClose: () => void }) {
+  const [f, setF] = useState({ type: 'PARKING', prefix: 'PP', from: '1', to: '10', floor: '', targetRent: '' });
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const from = Number(f.from);
+  const to = Number(f.to);
+  const count = Number.isInteger(from) && Number.isInteger(to) && to >= from ? to - from + 1 : 0;
+  const save = useAction(
+    () => api<{ created: number; skipped: string[] }>(`/properties/${propertyId}/units/bulk`, { body: { type: f.type, prefix: f.prefix, from, to, floor: f.floor, targetRentCents: f.targetRent ? toCents(f.targetRent) : null } }),
+    { success: (r) => `${r.created} Objekte angelegt`, invalidate: [['property'], ['properties'], ['units']], onSuccess: onClose },
+  );
+  return (
+    <Modal open onClose={onClose} title="Mehrere Parkplätze / Garagen anlegen" footer={<><Button variant="secondary" onClick={onClose}>Abbrechen</Button><Button loading={save.isPending} disabled={!count || count > 200} onClick={() => save.mutate(undefined)}>{count} anlegen</Button></>}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Art"><Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value, prefix: e.target.value === 'GARAGE' ? 'G' : e.target.value === 'PARKING' ? 'PP' : f.prefix })} options={{ PARKING: UNIT_TYPES.PARKING, GARAGE: UNIT_TYPES.GARAGE, STORAGE: UNIT_TYPES.STORAGE }} /></Field>
+        <Field label="Bezeichnung (Vorsatz)" hint="z. B. PP → PP1, PP2 …"><Input value={f.prefix} onChange={set('prefix')} /></Field>
+        <Field label="Von Nummer"><Input type="number" value={f.from} onChange={set('from')} /></Field>
+        <Field label="Bis Nummer"><Input type="number" value={f.to} onChange={set('to')} /></Field>
+        <Field label="Etage / Ort"><Input value={f.floor} onChange={set('floor')} placeholder="z. B. Tiefgarage" /></Field>
+        <Field label="Richtmiete pro Objekt (CHF)"><Input value={f.targetRent} onChange={set('targetRent')} inputMode="decimal" /></Field>
+      </div>
+      <p className="mt-4 text-sm text-slate-500">
+        {count ? <>Es werden <b>{count}</b> Objekte angelegt: {f.prefix}{from} bis {f.prefix}{to}. Bereits vorhandene Bezeichnungen werden übersprungen.</> : 'Bitte gültigen Bereich angeben.'}
+      </p>
+    </Modal>
+  );
+}
+
 interface PropertyDetail extends Record<string, unknown> {
   id: string; name: string; street: string; zip: string; city: string; type: string; yearBuilt: number | null; description: string | null; tenantInfo: string | null; purchasePriceCents: number | null;
   units: { id: string; label: string; type: string; floor: string | null; rooms: string | null; areaM2: string | null; targetRentCents: number | null; leases: { id: string; netRentCents: number; utilitiesCents: number; endDate: string | null; status: string; tenant: TenantRef }[] }[];
@@ -128,11 +161,16 @@ export function PropertyDetailPage() {
   const [tab, setTab] = useState('units');
   const [edit, setEdit] = useState(false);
   const [unitOpen, setUnitOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const navigate = useNavigate();
   const { data: p, isLoading } = useQuery({ queryKey: ['property', id], queryFn: () => api<PropertyDetail>(`/properties/${id}`) });
   if (isLoading || !p) return <Loading />;
   const fin = can('finance:read');
-  const occupied = p.units.filter((u) => u.leases.length);
+  const units = [...p.units].sort((a, b) => Number(PARKING.has(a.type)) - Number(PARKING.has(b.type)) || a.label.localeCompare(b.label, 'de', { numeric: true }));
+  const living = units.filter((u) => !PARKING.has(u.type));
+  const parking = units.filter((u) => PARKING.has(u.type));
+  const occupiedLiving = living.filter((u) => u.leases.length).length;
+  const occupiedParking = parking.filter((u) => u.leases.length).length;
   const monthly = p.units.reduce((s, u) => s + u.leases.reduce((a, l) => a + l.netRentCents + l.utilitiesCents, 0), 0);
   return (
     <>
@@ -143,20 +181,20 @@ export function PropertyDetailPage() {
         actions={can('property:write') && <Button variant="secondary" icon={<Pencil className="h-4 w-4" />} onClick={() => setEdit(true)}>Bearbeiten</Button>}
       />
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Mietobjekte" value={p.units.length} />
-        <StatCard label="Vermietet" value={`${occupied.length} / ${p.units.length}`} sub={`${p.units.length - occupied.length} leer`} />
+        <StatCard label="Wohnungen / Gewerbe vermietet" value={`${occupiedLiving} / ${living.length}`} sub={`${living.length - occupiedLiving} leer`} />
+        <StatCard label="Parkplätze / Garagen vermietet" value={`${occupiedParking} / ${parking.length}`} sub={`${parking.length - occupiedParking} frei`} />
         {fin && <StatCard label="Soll-Mietertrag / Monat" value={chf(monthly)} />}
         {fin && <StatCard label="Soll-Mietertrag / Jahr" value={chf(monthly * 12)} />}
       </div>
       <Tabs value={tab} onChange={setTab} tabs={[{ key: 'units', label: 'Mietobjekte', count: p.units.length }, { key: 'damages', label: 'Mängel' }, { key: 'docs', label: 'Dokumente' }, { key: 'info', label: 'Stammdaten' }]} />
       {tab === 'units' && (
-        <Card title="Wohnungen und Mietobjekte" actions={can('unit:write') && <Button size="sm" icon={<Plus className="h-4 w-4" />} onClick={() => setUnitOpen(true)}>Objekt hinzufügen</Button>} bodyClassName="overflow-x-auto">
+        <Card title="Wohnungen und Mietobjekte" actions={can('unit:write') && <div className="flex gap-2"><Button size="sm" variant="secondary" icon={<Car className="h-4 w-4" />} onClick={() => setBulkOpen(true)}>Mehrere Parkplätze/Garagen</Button><Button size="sm" icon={<Plus className="h-4 w-4" />} onClick={() => setUnitOpen(true)}>Objekt hinzufügen</Button></div>} bodyClassName="overflow-x-auto">
           <table className="table-base">
             <thead>
               <tr><th>Objekt</th><th>Art</th><th>Etage</th><th className="num">Zimmer</th><th className="num">Fläche</th><th>Mieter</th>{fin && <th className="num">Miete / Monat</th>}<th>Status</th></tr>
             </thead>
             <tbody>
-              {p.units.map((u) => {
+              {units.map((u) => {
                 const l = u.leases[0];
                 return (
                   <tr key={u.id} className="clickable" onClick={() => navigate(`/objekte/${u.id}`)}>
@@ -191,6 +229,7 @@ export function PropertyDetailPage() {
       )}
       {edit && <PropertyForm open onClose={() => setEdit(false)} initial={p} />}
       {unitOpen && <UnitForm propertyId={p.id} onClose={() => setUnitOpen(false)} />}
+      {bulkOpen && <BulkUnitForm propertyId={p.id} onClose={() => setBulkOpen(false)} />}
     </>
   );
 }
