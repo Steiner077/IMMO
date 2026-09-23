@@ -63,6 +63,16 @@ export function AssistantWidget() {
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 50);
   }, [open]);
+  // Fragen aus der Suchleiste übernehmen
+  const sendRef = useRef<(t: string) => void>(() => undefined);
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      setOpen(true);
+      sendRef.current((e as CustomEvent<string>).detail);
+    };
+    window.addEventListener('immo:ask', onAsk);
+    return () => window.removeEventListener('immo:ask', onAsk);
+  }, []);
 
   if (!can('dashboard:read')) return null;
 
@@ -85,6 +95,8 @@ export function AssistantWidget() {
       setBusy(false);
     }
   };
+
+  sendRef.current = send;
 
   return (
     <>

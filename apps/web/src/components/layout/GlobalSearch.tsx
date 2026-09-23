@@ -1,4 +1,4 @@
-import { Building2, FileText, Home, MessageSquare, Search, User, Wallet, Wrench } from 'lucide-react';
+import { Building2, FileText, Home, MessageSquare, Search, Sparkles, User, Wallet, Wrench } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -49,6 +49,12 @@ export function GlobalSearch() {
     enabled: debounced.length >= 2,
   });
 
+  const { data: ai } = useQuery({ queryKey: ['ai-status'], queryFn: () => api<{ enabled: boolean }>('/ai/status'), staleTime: 300_000 });
+  const ask = () => {
+    window.dispatchEvent(new CustomEvent('immo:ask', { detail: q.trim() }));
+    setOpen(false);
+    setQ('');
+  };
   const go = (to: string) => {
     setOpen(false);
     setQ('');
@@ -78,6 +84,10 @@ export function GlobalSearch() {
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          // Enter bei einer Frage/Mehrwort-Eingabe ohne Treffer → Assistent
+          if (e.key === 'Enter' && ai?.enabled && q.trim().length > 2 && (!data || groups.length === 0 || /\?$|^(wer|was|wie|wo|wann|welche|zeig|öffne|bring)\b/i.test(q.trim()))) ask();
+        }}
         placeholder="Suchen: Mieter, Wohnung, Zahlung, Dokument, Ticket …"
         className="input rounded-lg border-slate-200 bg-slate-50 pr-12 pl-9 focus:bg-white"
       />
@@ -85,7 +95,13 @@ export function GlobalSearch() {
       {open && debounced.length >= 2 && (
         <div className="absolute z-50 mt-2 max-h-[70vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
           {isFetching && !data && <p className="px-3 py-4 text-sm text-slate-500">Suche …</p>}
-          {data && groups.length === 0 && <p className="px-3 py-4 text-sm text-slate-500">Keine Treffer für „{debounced}“.</p>}
+          {data && groups.length === 0 && <p className="px-3 pt-3 pb-1 text-sm text-slate-500">Keine Treffer für „{debounced}“.</p>}
+          {ai?.enabled && data && (
+            <button onClick={ask} className="mb-1 flex w-full items-center gap-3 rounded-lg bg-brand-50/60 px-3 py-2.5 text-left hover:bg-brand-50">
+              <Sparkles className="h-4 w-4 text-brand-600" />
+              <span className="text-sm text-slate-800">„{q.trim()}“ <span className="font-medium text-brand-700">den Assistenten fragen</span></span>
+            </button>
+          )}
           {groups.map((g) => (
             <div key={g.label} className="mb-1">
               <p className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wider text-slate-400 uppercase">{g.label}</p>
