@@ -1,5 +1,6 @@
 /**
  * Verwaltungsbefehle für den Betrieb.
+ *   node dist/cli.js reset-password --email ich@example.ch
  *   node dist/cli.js create-owner --org "Meine Verwaltung" --email ich@example.ch --first Vorname --last Nachname
  * Das Startpasswort wird aus INITIAL_PASSWORD gelesen oder zufällig erzeugt und einmalig ausgegeben.
  */
@@ -37,6 +38,14 @@ async function main() {
       });
       console.log(`Eigentümer ${email} für "${org}" angelegt.`);
       if (!process.env.INITIAL_PASSWORD) console.log(`Startpasswort (einmalig angezeigt, beim ersten Login ändern): ${password}`);
+    } else if (cmd === 'reset-password') {
+      const email = opt('email')?.toLowerCase();
+      if (!email) throw new Error('Benötigt: --email');
+      const user = await prisma.user.findFirst({ where: { email } });
+      if (!user) throw new Error(`Kein Benutzer mit E-Mail ${email} gefunden.`);
+      const password = `${randomBytes(9).toString('base64url')}7a`;
+      await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(password), mustChangePassword: true, failedLoginCount: 0, lockedUntil: null } });
+      console.log(`Neues Startpasswort für ${email} (beim nächsten Login ändern): ${password}`);
     } else {
       console.log('Befehle: create-owner --org <Name> --email <E-Mail> --first <Vorname> --last <Nachname>');
       process.exitCode = 1;
