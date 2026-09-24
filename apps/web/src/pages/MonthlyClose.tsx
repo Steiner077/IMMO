@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -9,6 +9,8 @@ import type { TenantRef } from '@/lib/types';
 import { Button, Card, EmptyState, Loading, Modal, PageHeader, Select, StatCard } from '@/components/ui';
 import { ChargeBadge } from '@/components/StatusBadge';
 import { TenantAccount } from '@/components/TenantAccount';
+import { PaymentEntry } from '@/components/PaymentEntry';
+import { useAuth } from '@/lib/auth';
 
 interface Monthly {
   period: string;
@@ -24,6 +26,9 @@ export function MonthlyClosePage() {
   const [propertyId, setPropertyId] = useState('');
   const [status, setStatus] = useState('');
   const [tenant, setTenant] = useState<{ id: string; name: string } | null>(null);
+  const [pay, setPay] = useState<{ tenantId: string; chargeId: string } | null>(null);
+  const { can } = useAuth();
+  const canPay = can('finance:write');
   const { data, isLoading } = useQuery({ queryKey: ['monthly', period, propertyId], queryFn: () => api<Monthly>(`/monthly/${period}${propertyId ? `?propertyId=${propertyId}` : ''}`) });
   const go = (p: string) => navigate(`/monatsabschluss/${p}`);
   const s = data?.summary;
@@ -88,7 +93,7 @@ export function MonthlyClosePage() {
             {!rows.length ? <EmptyState title="Keine Einträge" text="Für diesen Monat bestehen keine passenden Sollstellungen." /> : (
               <div className="overflow-x-auto">
                 <table className="table-base">
-                  <thead><tr><th>Mieter</th><th>Immobilie / Wohnung</th><th>Fällig</th><th className="num">Soll</th><th className="num">Bezahlt</th><th className="num">Offen</th><th>Zahlung</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Mieter</th><th>Immobilie / Wohnung</th><th>Fällig</th><th className="num">Soll</th><th className="num">Bezahlt</th><th className="num">Offen</th><th>Zahlung</th><th>Status</th>{canPay && <th />}</tr></thead>
                   <tbody>
                     {rows.map((r) => (
                       <tr key={r.chargeId} className="clickable" onClick={() => setTenant({ id: r.tenant.id, name: tenantName(r.tenant) })}>
@@ -100,6 +105,15 @@ export function MonthlyClosePage() {
                         <td className={`num ${r.openCents ? 'font-medium text-red-700' : 'text-slate-400'}`}>{r.openCents ? chf(r.openCents) : '–'}</td>
                         <td className="text-xs">{r.payments.map((p) => <Link key={p.id} onClick={(e) => e.stopPropagation()} to={`/zahlungen/${p.id}`} className="mr-2 text-brand-700 hover:underline">#{p.number} ({formatDate(p.bookingDate).slice(0, 6)})</Link>)}</td>
                         <td><ChargeBadge status={r.status} /></td>
+                        {canPay && (
+                          <td className="text-right">
+                            {r.openCents > 0 && (
+                              <Button size="sm" variant="secondary" icon={<Check className="h-3.5 w-3.5" />} onClick={(e) => { e.stopPropagation(); setPay({ tenantId: r.tenant.id, chargeId: r.chargeId }); }}>
+                                Bezahlt
+                              </Button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -109,6 +123,7 @@ export function MonthlyClosePage() {
           </Card>
         </>
       )}
+      {pay && <PaymentEntry tenantId={pay.tenantId} chargeId={pay.chargeId} onClose={() => setPay(null)} />}
       <Modal open={!!tenant} onClose={() => setTenant(null)} title={`Zahlungshistorie · ${tenant?.name}`} size="xl" footer={<Link to={`/mieter/${tenant?.id}`}><Button variant="secondary">Zum Mieterprofil</Button></Link>}>
         {tenant && <TenantAccount tenantId={tenant.id} compact />}
       </Modal>

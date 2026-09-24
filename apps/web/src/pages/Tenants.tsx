@@ -1,4 +1,4 @@
-import { KeyRound, Mail, Pencil, Phone, Plus, Search, Smartphone } from 'lucide-react';
+import { KeyRound, Mail, Pencil, Phone, Plus, Search, Smartphone, Wallet } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import { DocumentsPanel } from '@/components/DocumentsPanel';
 import { TenantAccount } from '@/components/TenantAccount';
 import { ConversationList } from './Messages';
 import { RentOutForm, type RentUnit } from '@/components/RentOutForm';
+import { PaymentEntry } from '@/components/PaymentEntry';
 
 interface TenantRow {
   id: string; firstName: string | null; lastName: string | null; companyName: string | null; email: string | null; phone: string | null; portalAccess: boolean; openCents?: number;
@@ -124,6 +125,7 @@ export function TenantDetailPage() {
   const [edit, setEdit] = useState(false);
   const [creds, setCreds] = useState<{ email: string; initialPassword: string } | null>(null);
   const [assign, setAssign] = useState(false);
+  const [pay, setPay] = useState(false);
   const { data: t, isLoading } = useQuery({ queryKey: ['tenant', id], queryFn: () => api<TenantDetail>(`/tenants/${id}`) });
   const access = useAction(() => api<{ email: string; initialPassword: string }>(`/tenants/${id}/portal-access`, { body: {} }), { success: 'Zugang erstellt', invalidate: [['tenant', id!]], onSuccess: setCreds });
   if (isLoading || !t) return <Loading />;
@@ -135,7 +137,8 @@ export function TenantDetailPage() {
         subtitle={t.leases.filter((l) => l.status !== 'ENDED').map((l) => `${l.unit.property.name} · ${l.unit.label}`).join(' | ') || 'Kein aktives Mietverhältnis'}
         actions={
           <>
-            {can('lease:write') && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setAssign(true)}>Objekte zuweisen</Button>}
+            {can('finance:write') && <Button icon={<Wallet className="h-4 w-4" />} onClick={() => setPay(true)}>Zahlung erfassen</Button>}
+            {can('lease:write') && <Button variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => setAssign(true)}>Objekte zuweisen</Button>}
             {can('tenant:write') && <Button variant="secondary" icon={<Pencil className="h-4 w-4" />} onClick={() => setEdit(true)}>Bearbeiten</Button>}
             {can('user:manage') && !t.user && <Button variant="secondary" icon={<KeyRound className="h-4 w-4" />} loading={access.isPending} onClick={() => access.mutate(undefined)}>Mieter-App-Zugang erstellen</Button>}
           </>
@@ -202,6 +205,7 @@ export function TenantDetailPage() {
       {tab === 'docs' && <Card bodyClassName="p-0"><DocumentsPanel filter={{ tenantId: t.id }} /></Card>}
       {tab === 'messages' && <ConversationList filter={{ tenantId: t.id }} />}
       {edit && <TenantForm onClose={() => setEdit(false)} initial={t} />}
+      {pay && <PaymentEntry tenantId={t.id} onClose={() => setPay(false)} />}
       {assign && <AssignUnits tenantId={t.id} rented={t.leases.filter((l) => l.status !== 'ENDED').map((l) => ({ id: l.unit.id, label: l.unit.label, property: l.unit.property.name }))} onClose={() => setAssign(false)} />}
       <Modal open={!!creds} onClose={() => setCreds(null)} title="Zugangsdaten Mieter-App" footer={<Button onClick={() => setCreds(null)}>Verstanden</Button>}>
         <p className="text-sm text-slate-600">Bitte übermitteln Sie diese Zugangsdaten sicher an den Mieter. Beim ersten Login muss ein eigenes Passwort gesetzt werden. Das Passwort wird nur einmal angezeigt.</p>

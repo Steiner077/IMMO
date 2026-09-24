@@ -263,6 +263,27 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(dec.rows.some((r: { tenant: { lastName: string } }) => r.tenant.lastName === 'Wyss')).toBe(false);
   });
 
+  it('Zahlung erfassen: offene Monate je Mieter, Wohnung + Parkplatz in einem Schritt', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const items = (await get(t, '/api/v1/payments/open-items')).json();
+    expect(items.length).toBeGreaterThan(3);
+    // sortiert nach offenem Betrag
+    for (let i = 1; i < items.length; i++) expect(items[i - 1].openCents).toBeGreaterThanOrEqual(items[i].openCents);
+    const withOpen = items.find((x: { open: unknown[] }) => x.open.length > 0);
+    const first = withOpen.open[0];
+    const sameMonth = withOpen.open.filter((o: { period: string }) => o.period === first.period);
+    const amount = sameMonth.reduce((s: number, o: { outstandingCents: number }) => s + o.outstandingCents, 0);
+    const r = await app.inject({
+      method: 'POST', url: '/api/v1/payments', headers: auth,
+      payload: { leaseId: first.leaseId, bookingDate: '2026-09-20', amountCents: amount, method: 'BANK_TRANSFER', allocations: sameMonth.map((o: { chargeId: string; outstandingCents: number }) => ({ chargeId: o.chargeId, amountCents: o.outstandingCents })) },
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    const after = (await get(t, '/api/v1/payments/open-items')).json().find((x: { tenant: { id: string } }) => x.tenant.id === withOpen.tenant.id);
+    expect(after.open.some((o: { chargeId: string }) => sameMonth.some((m: { chargeId: string }) => m.chargeId === o.chargeId))).toBe(false);
+    expect(after.openCents).toBe(withOpen.openCents - amount);
+  });
+
   it('Stornierte Zahlung setzt den Monat wieder auf offen', async () => {
     const t = await login('verwaltung@immo.local');
     const auth = { authorization: `Bearer ${t}` };
