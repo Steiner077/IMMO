@@ -53,3 +53,14 @@ docker compose --env-file .env up -d --build
 | `LOG_LEVEL` | Protokollstufe | `info` |
 
 Fachliche Einstellungen (Schwellenwerte der Zahlungsautomatik, Karenzfrist, Vorlaufzeiten, Excel-Ablage, Mieter-Hinweise) werden in der App unter **Einstellungen → Organisation & Automatik** gepflegt und protokolliert.
+
+## Sicherung auf dem eigenen PC (ohne Docker)
+
+```
+npm run sichern                        # Ordner backups/ im Projekt
+npm run sichern -- "D:\Sicherung"      # z. B. USB-Stick oder OneDrive-Ordner
+npm run wiederherstellen -- <Datei.dump> --ja
+```
+
+Gesichert werden die Datenbank (aus `apps/api/.env`) und die Dokumentenablage. Die letzten 30 Sicherungen bleiben erhalten.
+`pg_dump` wird im PATH oder unter `C:\Program Files\PostgreSQL\<Version>\bin` gesucht.
