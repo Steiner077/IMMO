@@ -124,3 +124,82 @@ Datum        Text                                   Belastung     Gutschrift    
     expect(r.transactions.map((t) => t.payerName)).toEqual(['Vonlanthen Marc', 'Anna Andrist']);
   });
 });
+
+describe('Raiffeisen E-Banking-Auszug (ohne Saldospalte, neueste zuerst)', () => {
+  // Nachbau des echten Layouts mit erfundenen Namen
+  const P = (page: number, rows: [number, string][][]) =>
+    rows.map((items, i) => ({ page, y: 800 - i * 12, text: items.map(([, s]) => s).join('  '), items: items.map(([x, s]) => ({ str: s, x, width: s.length * 4.6 })) }));
+  const head = (p: number): [number, string][][] => [
+    [[310, 'Kontoinhaber:'], [373, 'Hans und Rita Beispiel']],
+    [[57, 'Raiffeisenbank']],
+    [[57, 'Kontoauszug'], [124, '(Buchungsdatum vom 04.03.2025 bis 23.04.2025)'], [500, `Seite ${p} von 2`]],
+    [[60, 'Datum'], [118, 'Text'], [322, 'Belastung'], [388, 'Gutschrift'], [520, 'Valuta']],
+  ];
+  const foot: [number, string][][] = [[[57, 'Alle Angaben erfolgen ohne Gewähr.'], [426, 'Druckdatum: 23.04.2025 14:16']], [[57, 'Raiffeisenbank Genossenschaft']]];
+  const lines = [
+    ...P(1, [
+      ...head(1),
+      [[60, '09.04.2025'], [118, 'Gutschrift Otto Vorbesitzer sel.'], [405, '60.00'], [505, '09.04.2025']],
+      [[118, 'Seeweg 8, 6460 Altdorf UR'], [405, '60.00']],
+      [[118, 'Keller Stefanie']],
+      [[118, 'Miete Parkplatz April 2025']],
+      [[60, '01.04.2025'], [118, 'Gutschrift Anna Brunner'], [401, '100.00'], [505, '01.04.2025']],
+      [[118, 'Vorstadt 7'], [401, '100.00']],
+      [[118, '6460 Altdorf UR']],
+      [[60, '31.03.2025'], [118, 'Sammelzahlung'], [312, "1'451'355.00"], [505, '31.03.2025']],
+      [[118, 'Papierauftrag']],
+      [[118, 'Otto Vorbesitzer'], [312, "1'356'355.00"]],
+      [[118, 'Kauf Liegenschaft Kreuzgasse 1']],
+      [[118, 'Notar Muster'], [324, "95'000.00"]],
+      [[60, '31.03.2025'], [118, 'Gutschrift Moritz Beispiel-Muster'], [405, '50.00'], [505, '31.03.2025']],
+      [[118, 'Gotthardstrasse 32'], [405, '50.00']],
+      [[118, '6460 Altdorf UR']],
+      [[118, 'Monatliche Parkgebuehr']],
+      [[60, '24.03.2025'], [118, 'Zahlung Muster Immobilien GmbH'], [324, "48'645.00"], [505, '24.03.2025']],
+      ...foot,
+    ]),
+    ...P(2, [
+      ...head(2),
+      [[118, 'Axenstrasse 11, 6440 Brunnen'], [324, "48'645.00"]],
+      [[118, 'Papierauftrag']],
+      [[60, '21.03.2025'], [118, 'Gutschrift Otto Vorbesitzer sel.'], [394, "1'500.00"], [505, '21.03.2025']],
+      [[118, 'Seeweg 8'], [394, "1'500.00"]],
+      [[118, '6460 Altdorf UR']],
+      [[118, 'Lars Wiesner']],
+      [[118, 'Miete Wohnung OG April 2025']],
+      [[60, 'Umsatz'], [312, "1'500'000.00"], [379, "1'710.00"]],
+      ...foot,
+    ]),
+  ];
+  const r = parseStatementLines(lines);
+
+  it('erkennt jede Buchung genau einmal (Betrag auf Folgezeile nicht doppelt)', () => {
+    expect(r.transactions.map((t) => [t.bookingDate.toISOString().slice(0, 10), t.isCredit ? '+' : '-', t.amountCents])).toEqual([
+      ['2025-04-09', '+', 6000],
+      ['2025-04-01', '+', 10000],
+      ['2025-03-31', '-', 145135500],
+      ['2025-03-31', '+', 5000],
+      ['2025-03-24', '-', 4864500],
+      ['2025-03-21', '+', 150000],
+    ]);
+  });
+
+  it('nimmt den eigentlichen Mieter aus dem Text, wenn über ein anderes Konto überwiesen wird', () => {
+    const c = r.transactions.filter((t) => t.isCredit);
+    expect(c.map((t) => t.payerName)).toEqual(['Keller Stefanie', 'Anna Brunner', 'Moritz Beispiel-Muster', 'Lars Wiesner']);
+    expect(c[0].reference).toContain('Miete Parkplatz April 2025');
+    expect(c[0].reference).toContain('Otto Vorbesitzer');
+    expect(c[2].reference).toContain('Monatliche Parkgebuehr');
+  });
+
+  it('Buchung über den Seitenwechsel bleibt zusammen, Kopf-/Fusszeilen stören nicht', () => {
+    const z = r.transactions.find((t) => t.amountCents === 4864500)!;
+    expect(z.rawText).toContain('Axenstrasse 11');
+    expect(r.transactions.some((t) => /Druckdatum|Alle Angaben/.test(t.rawText))).toBe(false);
+  });
+
+  it('prüft die Vollständigkeit mit der Umsatz-Zeile', () => {
+    expect(r.meta.balanceCheck).toEqual({ verified: 6, checked: 6, corrected: 0 });
+    expect(r.transactions.every((t) => t.verified)).toBe(true);
+  });
+});

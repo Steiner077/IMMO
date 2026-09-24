@@ -18,11 +18,15 @@ const QR_REF_RE = /\b(\d{2}(?:\s?\d{5}){5})\b/;
 
 const CREDIT_WORDS = /gutschrift|zahlungseingang|eingang|einzahlung|überweisung von|ueberweisung von|credit|vergütung|verguetung|qr-zahlung von|zahlung von/i;
 const DEBIT_WORDS = /belastung|lastschrift|zahlung an|dauerauftrag|bezug|debit|e-banking auftrag|gebühr|gebuehr|kartenzahlung|abbuchung|spesen/i;
-const SKIP_LINE = /^(saldo|saldovortrag|kontostand|übertrag|uebertrag|total|summe|seite \d|page \d|anfangssaldo|schlusssaldo|endsaldo|umsatztotal|zwischentotal)/i;
+const SKIP_LINE = /^(saldo|saldovortrag|kontostand|übertrag|uebertrag|total|summe|seite \d|page \d|anfangssaldo|schlusssaldo|endsaldo|umsatztotal|zwischentotal|umsatz\b|total umsatz)/i;
 const OPENING_BALANCE = /^(saldovortrag|anfangssaldo|saldo per|saldo vortrag|saldo$|saldo chf|übertrag|uebertrag|alter saldo|kontostand per|kontostand)/i;
 const PAYER_PREFIX = /^(?:gutschrift von|zahlung von|überweisung von|ueberweisung von|auftraggeber|von|absender|zahler|qr-zahlung von|einzahlung von)\b:?\s*/i;
 /** Buchungsarten am Zeilenanfang – sind nie der Name des Zahlers */
 const BOOKING_TYPE = /^(gutschrift|überweisung|ueberweisung|dauerauftrag|zahlungseingang|zahlung|lastschrift|belastung|einzahlung|e-banking-auftrag|e-banking|qr-zahlung|vergütung|verguetung|twint|bankomat|kartenzahlung|sammelgutschrift)\b\s*(?:(?:von|an)\b)?[:\s]*/i;
+/** Typische Fuss-/Kopfzeilen der Banken – gehören nie zu einer Buchung */
+const PAGE_NOISE = /ohne gewähr|ohne gewaehr|druckdatum|erstellt am|seite \d+ (von|\/) \d+|page \d+ of \d+|^kontoinhaber:|^kontoart:/i;
+/** Zeilenanfang einer neuen Buchung (für Buchungen ohne eigenes Datum) */
+const BOOKING_START = /^(gutschrift|überweisung|ueberweisung|dauerauftrag|zahlungseingang|zahlung|lastschrift|belastung|einzahlung|auszahlung|e-banking|qr-zahlung|vergütung|verguetung|twint|bankomat|kartenzahlung|sammelgutschrift|sammelzahlung|sammelauftrag|gebühr|gebuehr|spesen|zins|übertrag an|uebertrag an)\b/i;
 const REF_PREFIX = /^(mitteilung(?:en)?:?|zahlungszweck:?|verwendungszweck:?|referenz:?|ref\.?:?|zusätzliche informationen:?|zusaetzliche informationen:?|info:?|bemerkung:?)\s*/i;
 
 // ───── Datum ─────
@@ -180,9 +184,17 @@ function stripDatesAndAmounts(text: string): string {
     .trim();
 }
 
+const ADDRESS_LINE = /^\d{4,5}\s+\p{L}|\b\d{4}\s+\p{L}|(strasse|str\.|weg|gasse|platz|rain|halde|matt|allee|ring|quai|vorstadt)\b.*\d|^\p{L}[\p{L}.\- ]*\s\d{1,4}[a-z]?(,|$)/iu;
+const REF_WORDS = /miet|zins\b|nebenkost|wohnung|\bwhg\b|\bnk\b|akonto|parkplatz|parkgeb|einstellplatz|garage|gebühr|gebuehr|\bmonat|rechnung|beitrag|heizkost|\bstrom\b|kaution|depot|abrechnung|zimmer|\b(?:januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember)\b/i;
+/** "Keller Stefanie", "Moritz Beispiel-Muster", "Fakuri, Sebghatullah" */
+const PERSON = /^[\p{Lu}][\p{L}'’.\-]+(?:,?\s+(?:von\s+|de\s+|van\s+)?[\p{Lu}][\p{L}'’.\-]*){1,3}$/u;
+
 export function extractDetails(blockLines: string[]): { payerName: string | null; payerIban: string | null; reference: string | null } {
   let payerName: string | null = null;
   let payerIban: string | null = null;
+  /** Name nach der Adresse = eigentlicher Zahler (Überweisung über ein anderes Konto) */
+  let onBehalfOf: string | null = null;
+  let afterAddress = false;
   const refs: string[] = [];
   const candidates: string[] = [];
 
@@ -206,8 +218,16 @@ export function extractDetails(blockLines: string[]): { payerName: string | null
     }
     const qr = line.match(QR_REF_RE);
     if (qr) refs.push(qr[1]);
-    if (/miet|zins|nebenkost|wohnung|whg|nk\b|akonto|parkplatz|garage/i.test(line)) {
+    if (REF_WORDS.test(line)) {
       refs.push(line);
+      continue;
+    }
+    if (ADDRESS_LINE.test(line)) {
+      afterAddress = true;
+      continue;
+    }
+    if (afterAddress && !onBehalfOf && PERSON.test(line) && !CREDIT_WORDS.test(line) && !DEBIT_WORDS.test(line)) {
+      onBehalfOf = line.replace(/[,;]+$/, '');
       continue;
     }
     candidates.push(line);
@@ -225,6 +245,10 @@ export function extractDetails(blockLines: string[]): { payerName: string | null
           !DEBIT_WORDS.test(c),
       ) ?? null;
   }
+  if (onBehalfOf && onBehalfOf !== payerName) {
+    if (payerName) refs.push(`über Konto ${payerName}`);
+    payerName = onBehalfOf;
+  }
   return {
     payerName: payerName ? payerName.slice(0, 200) : null,
     payerIban,
@@ -237,8 +261,20 @@ export interface StatementOptions {
   trustColumns?: boolean;
 }
 
-export function parseStatementLines(lines: TextLine[], opts: StatementOptions = {}): ParseResult {
+/** Kopf-/Fusszeilen, die auf mehreren Seiten an gleicher Stelle stehen (Kontoinhaber, "Alle Angaben ohne Gewähr" …) */
+function withoutPageNoise(lines: TextLine[]): TextLine[] {
+  const pages = new Set(lines.map((l) => l.page));
+  if (pages.size < 2) return lines;
+  const key = (l: TextLine) => `${Math.round(l.y / 4)}|${l.text.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()}`;
+  const seen = new Map<string, Set<number>>();
+  for (const l of lines) seen.set(key(l), (seen.get(key(l)) ?? new Set()).add(l.page));
+  return lines.filter((l) => (seen.get(key(l))?.size ?? 0) < 2 || LINE_DATE.test(l.text) || usable(columnsOf(tokenize(l))));
+}
+
+export function parseStatementLines(input: TextLine[], opts: StatementOptions = {}): ParseResult {
+  const lines = withoutPageNoise(input);
   const warnings: string[] = [];
+  let totals: { credit: number | null; debit: number | null } | null = null;
   const detected = opts.trustColumns === false ? null : detectColumns(lines);
   const columns = detected?.columns ?? null;
   const hasDirectionCols = !!columns && columns.some((c) => c.kind === 'credit') && columns.some((c) => c.kind === 'debit');
@@ -323,6 +359,7 @@ export function parseStatementLines(lines: TextLine[], opts: StatementOptions = 
     const line = lines[i];
     const text = line.text.trim();
     if (!text) continue;
+    if (PAGE_NOISE.test(text) && !LINE_DATE.test(text)) continue;
     if (i < start) {
       // Kopfbereich: Jahr aus Zeitraum übernehmen, sonst nichts
       continue;
@@ -341,15 +378,24 @@ export function parseStatementLines(lines: TextLine[], opts: StatementOptions = 
       if (openingBalance === null && transactions.length === 0) openingBalance = amounts[amounts.length - 1].cents;
       continue;
     }
+    // Wiederholte Spaltenüberschrift (neue Seite): Buchung läuft weiter
+    if (/^(datum|buchungsdatum|abschluss|valuta|text|buchungstext)\b/i.test(text) && (columns ? columnsOf(tokenize(line)).length > 0 : true)) continue;
+    // Umsatz-/Totalzeile: Summen für die Vollständigkeitskontrolle merken
+    if (/^(umsatz|total|summe|umsatztotal)\b/i.test(rest) && columns && amounts.length) {
+      flush();
+      totals = { credit: amounts.find((a) => a.kind === 'credit')?.cents ?? null, debit: amounts.find((a) => a.kind === 'debit')?.cents ?? null };
+      continue;
+    }
     if (!current) continue;
-    if (SKIP_LINE.test(rest) || /^(datum|buchungsdatum|valuta|text|buchungstext)\b/i.test(text)) {
+    if (SKIP_LINE.test(rest)) {
       flush();
       continue;
     }
     // Weitere Buchung am selben Tag (Datum nur einmal gedruckt)
     const moving = amounts.filter(isMoving);
     const currentMoving = current.amounts.filter(isMoving);
-    const sameDay = currentMoving.length > 0 && moving.length > 0 && (hasDirectionCols || columns ? true : amounts.length >= 2) && rest.length > 0;
+    // (nur wenn die Zeile wie eine Buchung beginnt – sonst ist der Betrag ein Detail, z. B. Einzelbetrag)
+    const sameDay = currentMoving.length > 0 && moving.length > 0 && BOOKING_START.test(rest) && !/^sammel/i.test(current.headText);
     if (sameDay) {
       const d: Date = (current as Block).date;
       flush();
@@ -370,11 +416,24 @@ export function parseStatementLines(lines: TextLine[], opts: StatementOptions = 
   }
   flush();
 
-  const balanceCheck = verifyByBalance(transactions, openingBalance);
+  let balanceCheck = verifyByBalance(transactions, openingBalance);
+  // Ohne Saldospalte: Vollständigkeit über die Umsatz-/Totalzeile prüfen
+  if (!balanceCheck.checked && totals && (totals.credit !== null || totals.debit !== null)) {
+    const sum = (credit: boolean) => transactions.filter((t) => t.isCredit === credit).reduce((a, t) => a + t.amountCents, 0);
+    const okCredit = totals.credit === null || totals.credit === sum(true);
+    const okDebit = totals.debit === null || totals.debit === sum(false);
+    if (okCredit && okDebit) {
+      for (const t of transactions) t.verified = true;
+      balanceCheck = { verified: transactions.length, checked: transactions.length, corrected: 0 };
+    } else {
+      warnings.push(`Kontrolle mit der Umsatz-Zeile: Summe der erkannten ${okCredit ? 'Belastungen' : 'Gutschriften'} stimmt nicht mit dem Auszug überein – bitte Buchungen vergleichen.`);
+    }
+  }
   if (balanceCheck.corrected) warnings.push(`Saldo-Kontrolle: Bei ${balanceCheck.corrected} Buchung(en) wurde die Richtung (Gutschrift/Belastung) anhand des Kontosaldos korrigiert.`);
   if (balanceCheck.checked && balanceCheck.verified < balanceCheck.checked)
     warnings.push(`Saldo-Kontrolle: ${balanceCheck.checked - balanceCheck.verified} Betrag/Beträge passen nicht zum Saldo – bitte besonders prüfen.`);
   if (!transactions.length) warnings.push('Im Dokument wurden keine Buchungen erkannt.');
+  void hasDirectionCols;
   if (!columns && transactions.length) warnings.push('Keine Spalten Belastung/Gutschrift erkannt – Richtung wurde anhand des Buchungstextes bestimmt.');
 
   const ibanLine = lines.find((l) => /iban/i.test(l.text) && IBAN_RE.test(l.text));
