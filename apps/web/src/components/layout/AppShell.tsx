@@ -105,7 +105,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
       </nav>
-      <div className="border-t border-white/5 px-5 py-3 text-[11px] text-slate-500">Version 1.0 · Daten verschlüsselt übertragen</div>
+      <div className="border-t border-white/5 px-5 py-3 text-[11px] text-slate-500">Stand {__APP_VERSION__}</div>
     </div>
   );
 }
