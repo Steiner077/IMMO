@@ -61,7 +61,7 @@ export const PAYMENT_SOURCES = {
 } as const;
 
 export const IMPORT_ROW_STATUS = {
-  READY: 'Bereit zur Bestätigung',
+  READY: 'Sicher erkannt',
   NEEDS_REVIEW: 'Zuordnung prüfen',
   UNMATCHED: 'Unklar',
   DUPLICATE: 'Duplikat',

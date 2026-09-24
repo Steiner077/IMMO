@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarRange, Camera, Sparkles, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
+import { AlertTriangle, CalendarRange, Camera, Check, EyeOff, Undo2, Sparkles, UserSearch, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
 import { Fragment, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { useAction } from '@/lib/hooks';
 import { chf, formatDate, formatDateTime, formatPeriod, tenantName } from '@/lib/format';
 import type { TenantRef } from '@/lib/types';
-import { Badge, Button, Card, ConfidenceBar, EmptyState, Loading, Modal, PageHeader, StatCard, Tabs, Textarea, useToast } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Loading, Modal, PageHeader, StatCard, Tabs, Textarea, useToast } from '@/components/ui';
 import { ImportBadge } from '@/components/StatusBadge';
 import { AllocationEditor, type AllocationValue } from '@/components/AllocationEditor';
 
@@ -115,6 +115,12 @@ interface Row {
 }
 interface BatchDetail extends Omit<Batch, 'counts' | 'creditCents'> { meta: { format?: string; warnings?: string[]; iban?: string | null; ocr?: boolean; ai?: boolean; balanceCheck?: { verified: number; checked: number; corrected: number } | null }; rows: Row[] }
 
+/** Kurz, warum eine Zeile geprüft werden muss */
+function reviewHint(r: Row): string | null {
+  const hint = r.matchReasons.find((m) => /ähnlich|weicht|Mehrdeutig|nicht erkannt|Duplikat|Initiale|^Nachname "|Teilzahlung|Überzahlung|Restbetrag|kontrollieren|passt nicht|Abrechnungsbeginn/i.test(m));
+  return hint ?? null;
+}
+
 const STEPS = ['Zahlung erkennen', 'Zahler erkennen', 'Mieter suchen', 'Betrag vergleichen', 'Offene Monate prüfen', 'Monat bestimmen', 'Vertrag vergleichen', 'Sicherheit berechnen'];
 
 export function ImportDetailPage() {
@@ -209,7 +215,7 @@ export function ImportDetailPage() {
 
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Zahlungseingänge" value={credits.length} sub={chf(credits.reduce((s, r) => s + r.amountCents, 0))} />
-        <StatCard label="Bereit zur Bestätigung" value={count('READY')} tone="good" />
+        <StatCard label="Sicher erkannt" value={count('READY')} tone="good" />
         <StatCard label="Zuordnung prüfen" value={count('NEEDS_REVIEW')} tone={count('NEEDS_REVIEW') ? 'warn' : 'default'} />
         <StatCard label="Unklar" value={count('UNMATCHED')} tone={count('UNMATCHED') ? 'bad' : 'default'} />
         <StatCard label="Duplikate / ignoriert" value={count('DUPLICATE') + count('IGNORED')} />
@@ -221,6 +227,21 @@ export function ImportDetailPage() {
           <p className="flex items-center gap-2 font-medium"><CheckCircle2 className="h-4 w-4" />{result.posted} Zahlungen über {chf(result.totalCents)} verbucht. Mieterkonten, Monatsübersicht, Dashboard und Excel-Auswertung wurden aktualisiert.</p>
           {result.failed.map((f) => <p key={f.rowId} className="mt-1">Nicht verbucht: {f.error}</p>)}
         </div>
+      )}
+
+      {editable && b.status !== 'POSTED' && (count('NEEDS_REVIEW') > 0 || count('UNMATCHED') > 0 || count('READY') > 0 || confirmed.length > 0) && (
+        <ol className="mb-4 grid gap-2 text-sm md:grid-cols-3">
+          <li className={`rounded-xl border px-4 py-3 ${count('NEEDS_REVIEW') + count('UNMATCHED') ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-white text-slate-500'}`}>
+            <b>1. Prüfen</b> – bei jeder gelben/roten Zeile auf <b>«Stimmt»</b> klicken oder mit <b>«Ändern» / «Mieter wählen»</b> korrigieren.
+            {count('NEEDS_REVIEW') + count('UNMATCHED') > 0 && <span className="block text-xs">Noch {count('NEEDS_REVIEW') + count('UNMATCHED') - b.rows.filter((r) => r.confirmed && ['NEEDS_REVIEW', 'UNMATCHED'].includes(r.status)).length} offen</span>}
+          </li>
+          <li className={`rounded-xl border px-4 py-3 ${count('READY') ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-500'}`}>
+            <b>2. Sichere bestätigen</b> – «Alle sicheren bestätigen» übernimmt alle Zeilen «Sicher erkannt» auf einmal.
+          </li>
+          <li className={`rounded-xl border px-4 py-3 ${confirmed.length ? 'border-brand-200 bg-brand-50 text-brand-900' : 'border-slate-200 bg-white text-slate-500'}`}>
+            <b>3. Verbuchen</b> – «Alle bestätigten Zahlungen verbuchen». Erst dann werden die Mieten als bezahlt markiert.
+          </li>
+        </ol>
       )}
 
       <Card bodyClassName="p-0">
@@ -244,7 +265,7 @@ export function ImportDetailPage() {
         <div className="overflow-x-auto">
           <table className="table-base">
             <thead>
-              <tr><th className="w-10" /><th>Zahler / Referenz</th><th>Datum</th><th className="num">Betrag</th><th>Erkannter Mieter / Wohnung</th><th>Vorgeschlagener Monat</th><th>Sicherheit</th><th>Status</th><th /></tr>
+              <tr><th>Zahler / Mitteilung</th><th>Datum</th><th className="num">Betrag</th><th>Mieter / Objekt</th><th>Monat</th><th>Status</th><th /></tr>
             </thead>
             <tbody>
               {rows.map((r) => {
@@ -254,16 +275,11 @@ export function ImportDetailPage() {
                   <Fragment key={r.id}>
                     <tr className={`${r.confirmed && !done ? 'bg-emerald-50/50' : ''} ${!r.isCredit || r.status === 'IGNORED' || r.status === 'DUPLICATE' ? 'text-slate-400' : ''}`}>
                       <td>
-                        {done ? <CheckCircle2 className="h-4 w-4 text-brand-600" /> : (
-                          <input type="checkbox" className="h-4 w-4 rounded border-slate-300 accent-emerald-600" disabled={!canConfirm} checked={r.confirmed} onChange={() => toggle.mutate(r)} title="Zur Verbuchung bestätigen" />
-                        )}
-                      </td>
-                      <td>
                         <button className="flex items-center gap-1 text-left font-medium text-slate-900" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
                           {expanded === r.id ? <ChevronDown className="h-3.5 w-3.5 text-slate-400" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-400" />}
                           {r.payerName ?? '–'}
                         </button>
-                        <p className="max-w-64 truncate pl-4.5 text-xs text-slate-500" title={r.reference ?? ''}>{!r.isCredit && 'Belastung · '}{r.reference ?? ''}</p>
+                        <p className="max-w-52 truncate pl-4.5 text-xs text-slate-500" title={r.reference ?? ''}>{!r.isCredit && 'Belastung · '}{r.reference ?? ''}</p>
                       </td>
                       <td className="whitespace-nowrap">{formatDate(r.bookingDate)}</td>
                       <td className="num font-medium whitespace-nowrap">
@@ -275,24 +291,40 @@ export function ImportDetailPage() {
                         {r.tenant ? <span className="font-medium text-slate-800">{tenantName(r.tenant)}</span> : <span className="text-slate-400">–</span>}
                         {r.corrected && <Badge tone="purple" className="ml-1">korrigiert</Badge>}
                         {r.unit && <p className="text-xs whitespace-nowrap text-slate-500">{r.property?.name} · {r.unit.label}</p>}
+                        {r.status === 'NEEDS_REVIEW' && !r.confirmed && reviewHint(r) && <p className="mt-0.5 max-w-60 text-xs text-amber-700">{reviewHint(r)}</p>}
                       </td>
                       <td>{r.allocation.length ? [...new Set(r.allocation.map((a) => formatPeriod(a.period)))].join(', ') : r.suggestedPeriod ? formatPeriod(r.suggestedPeriod) : '–'}
                         {new Set(r.allocation.map((a) => a.label)).size > 1 && <p className="text-xs text-slate-500">{r.allocation.map((a) => a.label).join(' + ')}</p>}</td>
-                      <td>{r.isCredit && !['DUPLICATE', 'IGNORED'].includes(r.status) ? <ConfidenceBar value={r.confidence} /> : null}</td>
-                      <td>{done && r.payment ? <Link to={`/zahlungen/${r.payment.id}`}><Badge tone="blue">Verbucht #{r.payment.number}</Badge></Link> : <ImportBadge status={r.status} />}</td>
                       <td className="whitespace-nowrap">
-                        {editable && !done && r.isCredit && (
-                          <>
-                            <button className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Zuordnung korrigieren" onClick={() => setEditRow(r)}><Pencil className="h-4 w-4" /></button>
-                            <button className="rounded px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100" onClick={() => ignore.mutate(r)}>{r.status === 'IGNORED' ? 'Wieder aufnehmen' : 'Ignorieren'}</button>
-                          </>
+                        {done && r.payment ? <Link to={`/zahlungen/${r.payment.id}`}><Badge tone="blue">Verbucht #{r.payment.number}</Badge></Link> : r.confirmed ? <Badge tone="green"><Check className="mr-0.5 inline h-3 w-3" />Bestätigt</Badge> : <ImportBadge status={r.status} />}
+                        {!done && r.isCredit && r.suggestedLeaseId && !['DUPLICATE', 'IGNORED'].includes(r.status) && <p className="mt-0.5 text-xs text-slate-400">Sicherheit {r.confidence} %</p>}
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {editable && !done && r.isCredit && r.status !== 'DUPLICATE' && (
+                          <div className="flex items-center justify-end gap-1">
+                            {canConfirm && !r.confirmed && (
+                              <Button size="sm" variant="success" icon={<Check className="h-3.5 w-3.5" />} onClick={() => toggle.mutate(r)} title="Zuordnung stimmt – zur Verbuchung bestätigen">Stimmt</Button>
+                            )}
+                            {canConfirm && r.confirmed && (
+                              <button className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => toggle.mutate(r)} title="Bestätigung zurücknehmen" aria-label="Bestätigung zurücknehmen"><Undo2 className="h-4 w-4" /></button>
+                            )}
+                            {!r.suggestedLeaseId && !['IGNORED', 'DUPLICATE'].includes(r.status) ? (
+                              <Button size="sm" variant="secondary" icon={<UserSearch className="h-3.5 w-3.5" />} onClick={() => setEditRow(r)}>Mieter wählen</Button>
+                            ) : (
+                              r.status !== 'IGNORED' && <Button size="sm" variant="ghost" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => setEditRow(r)} title="Mieter oder Monat ändern">Ändern</Button>
+                            )}
+                            {r.status === 'IGNORED' ? (
+                              <button className="rounded px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100" onClick={() => ignore.mutate(r)}>Wieder aufnehmen</button>
+                            ) : (
+                              <button className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Ignorieren (keine Mietzahlung)" aria-label="Ignorieren" onClick={() => ignore.mutate(r)}><EyeOff className="h-4 w-4" /></button>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>
                     {expanded === r.id && (
                       <tr>
-                        <td />
-                        <td colSpan={8} className="bg-slate-50/60">
+                        <td colSpan={7} className="bg-slate-50/60">
                           <div className="grid gap-4 py-1 md:grid-cols-2">
                             <div>
                               <p className="mb-1 text-xs font-medium text-slate-500">Begründung der Automatik</p>
