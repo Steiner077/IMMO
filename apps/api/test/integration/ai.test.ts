@@ -213,7 +213,11 @@ describe('Kontoauszug mit KI', () => {
       }
       return b;
     };
-    const b = await wait();
+    let b = await wait();
+    expect(b.meta.ai).toBeFalsy(); // kostenlos: ohne Klick keine KI
+    expect(requests.length - before).toBe(0);
+    await app.inject({ method: 'POST', url: `/api/v1/imports/${b.id}/reanalyze`, headers: auth, payload: { ai: true } });
+    b = await wait();
     expect(b.meta.ai).toBe(true);
     expect(b.meta.balanceCheck).toEqual({ verified: 2, checked: 2, corrected: 0 });
     expect(b.rows).toHaveLength(2);

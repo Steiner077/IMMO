@@ -14,17 +14,24 @@ const run = promisify(execFile);
  * damit die Spaltenerkennung (Belastung/Gutschrift/Saldo) auch hier greift.
  */
 
-let available: boolean | null = null;
-export async function ocrAvailable(): Promise<boolean> {
-  if (available !== null) return available;
+let system: boolean | null = null;
+/** Tesseract + poppler installiert (Docker-Image)? Sonst übernimmt tesseract.js. */
+async function systemOcr(): Promise<boolean> {
+  if (system !== null) return system;
+  if (process.env.OCR_ENGINE === 'js') return (system = false);
   try {
     await run('tesseract', ['--version'], { timeout: 5000 });
     await run('pdftoppm', ['-v'], { timeout: 5000 });
-    available = true;
+    system = true;
   } catch {
-    available = false;
+    system = false;
   }
-  return available;
+  return system;
+}
+
+/** Texterkennung ist immer verfügbar: System-Tesseract oder tesseract.js (auch Windows) */
+export async function ocrAvailable(): Promise<boolean> {
+  return true;
 }
 
 interface Word { page: number; block: number; par: number; line: number; left: number; top: number; width: number; height: number; conf: number; text: string }
@@ -80,6 +87,7 @@ async function ocrImageFile(file: string, page: number): Promise<TextLine[]> {
 }
 
 export async function ocrPdf(data: Buffer, maxPages = 20): Promise<TextLine[]> {
+  if (!(await systemOcr())) return (await import('./ocr-js.js')).ocrPdfJs(data, maxPages);
   const dir = await mkdtemp(path.join(tmpdir(), 'immo-ocr-'));
   try {
     const input = path.join(dir, 'in.pdf');
@@ -95,6 +103,7 @@ export async function ocrPdf(data: Buffer, maxPages = 20): Promise<TextLine[]> {
 }
 
 export async function ocrImage(data: Buffer, ext: string): Promise<TextLine[]> {
+  if (!(await systemOcr())) return (await import('./ocr-js.js')).ocrImageJs(data);
   const dir = await mkdtemp(path.join(tmpdir(), 'immo-ocr-'));
   try {
     const file = path.join(dir, `in${ext}`);

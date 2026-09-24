@@ -175,7 +175,7 @@ export function ImportDetailPage() {
         subtitle={`Hochgeladen ${formatDateTime(b.createdAt)} · ${BATCH_STATUS[b.status]?.label}${b.meta.iban ? ` · Konto ${b.meta.iban}` : ''}`}
         actions={editable && b.status !== 'POSTED' && (
           <>
-            {aiStatus?.enabled && !b.meta.ai && !b.rows.some((r) => r.status === 'POSTED') && ['PDF', 'IMAGE', 'TEXT'].includes(b.fileType) && <Button variant="secondary" icon={<Sparkles className="h-4 w-4" />} loading={reanalyzeAi.isPending} onClick={() => reanalyzeAi.mutate(undefined)}>Mit KI einlesen</Button>}
+            {aiStatus?.enabled && !b.meta.ai && !b.rows.some((r) => r.status === 'POSTED') && ['PDF', 'IMAGE', 'TEXT'].includes(b.fileType) && <Button variant="secondary" icon={<Sparkles className="h-4 w-4" />} loading={reanalyzeAi.isPending} title="Nur wenn die kostenlose Erkennung nicht reicht – kostet wenige Rappen" onClick={() => confirm('Den Auszug kostenpflichtig mit der KI einlesen (wenige Rappen)?') && reanalyzeAi.mutate(undefined)}>Mit KI einlesen</Button>}
             {!b.rows.some((r) => r.status === 'POSTED') && <Button variant="ghost" icon={<RefreshCw className="h-4 w-4" />} onClick={() => reanalyze.mutate(undefined)}>Neu analysieren</Button>}
             {!b.rows.some((r) => r.status === 'POSTED') && <Button variant="ghost" icon={<Trash2 className="h-4 w-4" />} onClick={() => confirm('Import verwerfen?') && discard.mutate(undefined)}>Verwerfen</Button>}
           </>

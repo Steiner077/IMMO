@@ -59,13 +59,13 @@ async function tryAi(run: () => Promise<ParseResult>, fallback: ParseResult | nu
 }
 
 /**
- * Datei → Buchungen. Reihenfolge: eigener Leser (kostenlos, exakt) → bei schwachem Ergebnis
- * die KI (jedes Bankformat, Scans, Fotos) → sonst Texterkennung (OCR).
- * mode "force": direkt mit KI lesen; "off": nie KI.
+ * Datei → Buchungen. Standard (kostenlos): eigener Leser → bei Scans/Fotos Texterkennung (OCR).
+ * mode "force": auf Wunsch mit der KI lesen (jedes Bankformat, kostenpflichtig).
  */
 export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer, fileName = '', mode: 'auto' | 'force' | 'off' = 'auto'): Promise<ParseResult> {
-  const useAi = mode !== 'off' && aiEnabled();
-  const force = mode === 'force' && useAi;
+  // Kostenlos zuerst: die KI liest einen Auszug nur auf ausdrücklichen Wunsch ("Mit KI einlesen")
+  const useAi = mode === 'force' && aiEnabled();
+  const force = useAi;
   if (fileType === 'PDF') {
     const lines = await extractPdfLines(data);
     const res = parseStatementLines(lines);
