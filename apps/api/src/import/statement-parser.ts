@@ -437,11 +437,13 @@ export function parseStatementLines(input: TextLine[], opts: StatementOptions = 
   if (!columns && transactions.length) warnings.push('Keine Spalten Belastung/Gutschrift erkannt – Richtung wurde anhand des Buchungstextes bestimmt.');
 
   const ibanLine = lines.find((l) => /iban/i.test(l.text) && IBAN_RE.test(l.text));
+  const holderLine = input.map((l) => l.text.match(/(?:kontoinhaber|inhaber|kontoinhaberin)\s*:?\s+(.{3,80})/i)).find(Boolean);
   return {
     transactions,
     meta: {
       format: columns ? 'bank-statement-columns' : 'bank-statement-text',
       iban: ibanLine ? ibanLine.text.match(IBAN_RE)![1].replace(/\s/g, '') : null,
+      accountHolder: holderLine ? holderLine[1].trim() : null,
       warnings,
       lineCount: lines.length,
       balanceCheck: balanceCheck.checked ? balanceCheck : null,

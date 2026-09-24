@@ -198,8 +198,21 @@ describe('Raiffeisen E-Banking-Auszug (ohne Saldospalte, neueste zuerst)', () =>
     expect(r.transactions.some((t) => /Druckdatum|Alle Angaben/.test(t.rawText))).toBe(false);
   });
 
+  it('liest den Kontoinhaber', () => expect(r.meta.accountHolder).toBe('Hans und Rita Beispiel'));
+
   it('prüft die Vollständigkeit mit der Umsatz-Zeile', () => {
     expect(r.meta.balanceCheck).toEqual({ verified: 6, checked: 6, corrected: 0 });
     expect(r.transactions.every((t) => t.verified)).toBe(true);
+  });
+});
+
+import { isOwnTransfer } from '../src/services/imports.js';
+describe('Eigene Überweisungen', () => {
+  it('erkennt den Kontoinhaber, aber keine Mieter mit gleichem Nachnamen', () => {
+    const holder = 'Ambros und Ruth Arnold-Schuler';
+    expect(isOwnTransfer({ payerName: 'Ambros Arnold' }, holder)).toBe(true);
+    expect(isOwnTransfer({ payerName: 'Ruth Arnold-Schuler' }, holder)).toBe(true);
+    expect(isOwnTransfer({ payerName: 'Mario Arnold' }, holder)).toBe(false);
+    expect(isOwnTransfer({ payerName: 'Arnold' }, holder)).toBe(false);
   });
 });

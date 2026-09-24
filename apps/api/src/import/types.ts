@@ -32,6 +32,8 @@ export interface ParseResult {
     format: string;
     currency?: string;
     iban?: string | null;
+    /** Kontoinhaber laut Auszug (eigene Überweisungen werden ignoriert) */
+    accountHolder?: string | null;
     periodFrom?: string | null;
     periodTo?: string | null;
     warnings: string[];

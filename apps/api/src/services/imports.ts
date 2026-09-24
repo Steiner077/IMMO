@@ -36,6 +36,17 @@ async function ocrOrExplain(read: () => Promise<import('../import/types.js').Tex
   return res;
 }
 
+/** Gutschriften der Bank selbst (Hypothekarauszahlung, Zins, Rückvergütung) */
+const BANK_CREDIT = /^(auszahlung|habenzins|zins|zinsgutschrift|rückvergütung|rueckverguetung|kapitalauszahlung)\b/i;
+
+/** Überweisung des Kontoinhabers selbst ("Ambros Arnold" ⊂ "Ambros und Ruth Arnold-Schuler")? Vor- UND Nachname müssen passen. */
+export function isOwnTransfer(t: { payerName: string | null }, holder: string | null | undefined): boolean {
+  if (!holder || !t.payerName) return false;
+  const holderWords = new Set(normalizeText(holder).split(/\s+/).filter((w) => w.length > 2));
+  const payer = normalizeText(t.payerName).split(/\s+/).filter((w) => w.length > 1);
+  return payer.length >= 2 && payer.every((w) => holderWords.has(w));
+}
+
 /** Regelbasiertes Ergebnis unbrauchbar? (nichts erkannt oder Beträge widersprechen dem Saldo) */
 function weak(res: ParseResult) {
   const bc = res.meta.balanceCheck;
@@ -222,6 +233,14 @@ export async function analyzeBatch(batchId: string, mode: 'auto' | 'force' | 'of
       };
       if (!t.isCredit) {
         rows.push({ ...base, status: 'IGNORED', matchReasons: ['Belastung (Ausgang) – keine Mietzahlung'] });
+        return;
+      }
+      if (isOwnTransfer(t, parsed.meta.accountHolder)) {
+        rows.push({ ...base, status: 'IGNORED', matchReasons: [`Eigene Überweisung des Kontoinhabers (${parsed.meta.accountHolder}) – keine Mietzahlung`] });
+        return;
+      }
+      if (BANK_CREDIT.test((t.payerName ?? '').trim())) {
+        rows.push({ ...base, status: 'IGNORED', matchReasons: ['Bankbuchung (Auszahlung/Zins) – keine Mietzahlung'] });
         return;
       }
       if (existing.has(fp) || seenInFile.has(fp)) {

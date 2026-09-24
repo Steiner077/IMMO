@@ -169,6 +169,13 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
   type Scored = { c: MatchCandidate; score: number; identity: number; reasons: string[]; period: string | null; amountOk: boolean; open: MatchCandidate['openCharges'] };
   const scored: Scored[] = [];
 
+  // Name/IBAN unbekannt, aber der Betrag passt zu genau einem Mieter → als Vorschlag (immer prüfen)
+  const byAmount = new Set(
+    candidates.filter((c) => c.monthlyCents === tx.amountCents || c.openCharges.some((o) => o.outstandingCents === tx.amountCents)).map((c) => c.tenantId),
+  );
+  const amountOnlyTenant = byAmount.size === 1 ? [...byAmount][0] : null;
+  let usedAmountOnly = false;
+
   for (const c of candidates) {
     const reasons: string[] = [];
     let identity = 0;
@@ -203,7 +210,11 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
       if (ns.score > identity) identity = ns.score;
       if (ns.reason) reasons.push(ns.reason);
     }
-    if (identity === 0) continue;
+    if (identity === 0) {
+      if (c.tenantId !== amountOnlyTenant) continue;
+      identity = 35;
+      reasons.push(`Name nicht erkannt – der Betrag passt nur zu ${[c.firstName, c.lastName].filter(Boolean).join(' ') || c.companyName} (${c.unitLabel})`);
+    }
 
     let score = identity;
 
@@ -296,7 +307,8 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
     };
   }
 
-  let confidence = Math.min(99, best.score);
+  usedAmountOnly = best.identity === 35 && best.reasons[0]?.startsWith('Name nicht erkannt');
+  let confidence = Math.min(usedAmountOnly ? 60 : 99, best.score);
   const reasons = [...best.reasons];
   const second = scored[1];
   if (second && second.c.tenantId !== best.c.tenantId && best.score - second.score < 12) {
@@ -307,6 +319,7 @@ export function matchTransaction(tx: MatchTransaction, candidates: MatchCandidat
   const { lines, remainderCents } = allocate(tx.amountCents, best.open, best.period);
   let status: MatchResult['status'] = confidence >= ready && best.amountOk ? 'READY' : confidence >= review ? 'NEEDS_REVIEW' : 'UNMATCHED';
   if (status === 'READY' && remainderCents > 0) status = 'NEEDS_REVIEW';
+  if (usedAmountOnly) status = 'NEEDS_REVIEW'; // nur Betrag: nie automatisch, aber als Vorschlag zeigen
 
   return {
     tenantId: best.c.tenantId,

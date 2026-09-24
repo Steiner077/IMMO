@@ -178,3 +178,22 @@ describe('Namen mit abweichender Schreibweise', () => {
     expect(r.tenantId).not.toBe('s');
   });
 });
+
+describe('Betrag passt nur zu einem Mieter', () => {
+  const t = [
+    base({ tenantId: 'a', leaseId: 'la', firstName: 'Dora', lastName: 'Sun', monthlyCents: 130000, openCharges: [{ id: 'a4', period: '2025-04', outstandingCents: 130000 }] }),
+    base({ tenantId: 'b', leaseId: 'lb', firstName: 'Bea', lastName: 'Park', monthlyCents: 5000, openCharges: [{ id: 'b4', period: '2025-04', outstandingCents: 5000 }] }),
+    base({ tenantId: 'c', leaseId: 'lc', firstName: 'Cem', lastName: 'Platz', monthlyCents: 5000, openCharges: [{ id: 'c4', period: '2025-04', outstandingCents: 5000 }] }),
+  ];
+  it('schlägt den einzigen passenden Vertrag vor – nur zur Prüfung', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2025, 3, 1)), amountCents: 130000, payerName: 'Dominika Suntinger', reference: 'Miete Wohnung' }, t);
+    expect(r.tenantId).toBe('a');
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.confidence).toBeLessThanOrEqual(60);
+    expect(r.reasons[0]).toMatch(/Betrag passt nur zu/);
+  });
+  it('rät nicht, wenn mehrere Verträge denselben Betrag haben', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2025, 3, 1)), amountCents: 5000, payerName: 'Unbekannt Person', reference: null }, t);
+    expect(r.status).toBe('UNMATCHED');
+  });
+});
