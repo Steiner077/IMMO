@@ -21,48 +21,67 @@ interface NavItem {
   perm?: Permission;
 }
 const i = 'h-[18px] w-[18px]';
-const NAV: { group: string; items: NavItem[] }[] = [
-  { group: '', items: [{ to: '/', label: 'Dashboard', icon: <Gauge className={i} />, perm: 'dashboard:read' }] },
-  {
-    group: 'Bestand',
-    items: [
-      { to: '/immobilien', label: 'Immobilien', icon: <Building2 className={i} />, perm: 'property:read' },
-      { to: '/mieter', label: 'Mieter', icon: <Users className={i} />, perm: 'tenant:read' },
-      { to: '/mietvertraege', label: 'Mietverträge', icon: <KeyRound className={i} />, perm: 'lease:read' },
-    ],
-  },
-  {
-    group: 'Finanzen',
-    items: [
-      { to: '/zahlungen', label: 'Zahlungen', icon: <Wallet className={i} />, perm: 'finance:read' },
-      { to: '/zahlungen/import', label: 'Zahlungen importieren', icon: <Upload className={i} />, perm: 'payment:import' },
-      { to: '/monatsabschluss', label: 'Monatsabschluss', icon: <CalendarCheck className={i} />, perm: 'finance:read' },
-      { to: '/finanzen', label: 'Finanzen', icon: <PieChart className={i} />, perm: 'finance:read' },
-      { to: '/berichte', label: 'Berichte', icon: <BarChart3 className={i} />, perm: 'report:read' },
-    ],
-  },
-  {
-    group: 'Betrieb',
-    items: [
-      { to: '/maengel', label: 'Mängel', icon: <Wrench className={i} />, perm: 'damage:read' },
-      { to: '/dokumente', label: 'Dokumente', icon: <FolderOpen className={i} />, perm: 'document:read' },
-      { to: '/nachrichten', label: 'Nachrichten', icon: <MessageSquare className={i} />, perm: 'message:read' },
-      { to: '/aufgaben', label: 'Aufgaben', icon: <CheckSquare className={i} />, perm: 'task:read' },
-      { to: '/termine', label: 'Termine', icon: <CalendarDays className={i} />, perm: 'appointment:read' },
-    ],
-  },
-  {
-    group: 'System',
-    items: [
-      { to: '/automatisierung', label: 'Automatisierung', icon: <Zap className={i} />, perm: 'automation:manage' },
-      { to: '/protokoll', label: 'Änderungsprotokoll', icon: <History className={i} />, perm: 'audit:read' },
-      { to: '/einstellungen', label: 'Einstellungen', icon: <Settings className={i} />, perm: 'dashboard:read' },
-    ],
-  },
+/** Das Wichtigste direkt sichtbar – alles Weitere unter "Mehr" */
+const MAIN: NavItem[] = [
+  { to: '/', label: 'Übersicht', icon: <Gauge className={i} />, perm: 'dashboard:read' },
+  { to: '/immobilien', label: 'Immobilien', icon: <Building2 className={i} />, perm: 'property:read' },
+  { to: '/mieter', label: 'Mieter', icon: <Users className={i} />, perm: 'tenant:read' },
+  { to: '/zahlungen/import', label: 'Kontoauszug einlesen', icon: <Upload className={i} />, perm: 'payment:import' },
+  { to: '/zahlungen', label: 'Zahlungen', icon: <Wallet className={i} />, perm: 'finance:read' },
+  { to: '/monatsabschluss', label: 'Monatsabschluss', icon: <CalendarCheck className={i} />, perm: 'finance:read' },
+  { to: '/maengel', label: 'Mängel', icon: <Wrench className={i} />, perm: 'damage:read' },
+  { to: '/dokumente', label: 'Dokumente', icon: <FolderOpen className={i} />, perm: 'document:read' },
 ];
+const MORE: NavItem[] = [
+  { to: '/mietvertraege', label: 'Mietverträge', icon: <KeyRound className={i} />, perm: 'lease:read' },
+  { to: '/finanzen', label: 'Finanzen', icon: <PieChart className={i} />, perm: 'finance:read' },
+  { to: '/berichte', label: 'Berichte', icon: <BarChart3 className={i} />, perm: 'report:read' },
+  { to: '/nachrichten', label: 'Nachrichten', icon: <MessageSquare className={i} />, perm: 'message:read' },
+  { to: '/aufgaben', label: 'Aufgaben', icon: <CheckSquare className={i} />, perm: 'task:read' },
+  { to: '/termine', label: 'Termine', icon: <CalendarDays className={i} />, perm: 'appointment:read' },
+  { to: '/automatisierung', label: 'Automatisierung', icon: <Zap className={i} />, perm: 'automation:manage' },
+  { to: '/protokoll', label: 'Änderungsprotokoll', icon: <History className={i} />, perm: 'audit:read' },
+];
+const SETTINGS: NavItem = { to: '/einstellungen', label: 'Einstellungen', icon: <Settings className={i} />, perm: 'dashboard:read' };
+
+function NavEntry({ it, onNavigate }: { it: NavItem; onNavigate?: () => void }) {
+  return (
+    <NavLink
+      to={it.to}
+      end={it.to === '/' || it.to === '/zahlungen'}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        clsx(
+          'flex items-center gap-3 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors',
+          isActive ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-100',
+        )
+      }
+    >
+      {it.icon}
+      {it.label}
+    </NavLink>
+  );
+}
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { can } = useAuth();
+  const { pathname } = useLocation();
+  const more = MORE.filter((it) => !it.perm || can(it.perm));
+  const [moreOpen, setMoreOpen] = useState(() => {
+    try {
+      return localStorage.getItem('nav-more') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('nav-more', moreOpen ? '1' : '0');
+    } catch {
+      /* ohne Speicher weiter */
+    }
+  }, [moreOpen]);
+  const showMore = moreOpen || more.some((it) => pathname.startsWith(it.to));
   const { data: org } = useQuery({ queryKey: ['settings'], queryFn: () => api<{ organization: { name: string } }>('/settings') });
   return (
     <div className="flex h-full flex-col bg-ink text-slate-300">
@@ -75,37 +94,27 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <p className="truncate text-[11px] text-slate-400">{org?.organization.name ?? 'Verwaltung'}</p>
         </div>
       </div>
-      <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-3">
-        {NAV.map((g) => {
-          const items = g.items.filter((it) => !it.perm || can(it.perm));
-          if (!items.length) return null;
-          return (
-            <div key={g.group}>
-              {g.group && <p className="mb-1.5 px-2 text-[11px] font-medium tracking-wider text-slate-500 uppercase">{g.group}</p>}
-              <div className="space-y-0.5">
-                {items.map((it) => (
-                  <NavLink
-                    key={it.to}
-                    to={it.to}
-                    end={it.to === '/' || it.to === '/zahlungen'}
-                    onClick={onNavigate}
-                    className={({ isActive }) =>
-                      clsx(
-                        'flex items-center gap-3 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors',
-                        isActive ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-100',
-                      )
-                    }
-                  >
-                    {it.icon}
-                    {it.label}
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          );
-        })}
+      <nav className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="space-y-0.5">
+          {MAIN.filter((it) => !it.perm || can(it.perm)).map((it) => <NavEntry key={it.to} it={it} onNavigate={onNavigate} />)}
+        </div>
+        {more.length > 0 && (
+          <div className="mt-4">
+            <button
+              onClick={() => setMoreOpen(!showMore)}
+              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-[11px] font-medium tracking-wider text-slate-500 uppercase hover:text-slate-300"
+            >
+              Mehr
+              <ChevronDown className={clsx('h-3.5 w-3.5 transition-transform', showMore && 'rotate-180')} />
+            </button>
+            {showMore && <div className="mt-1 space-y-0.5">{more.map((it) => <NavEntry key={it.to} it={it} onNavigate={onNavigate} />)}</div>}
+          </div>
+        )}
       </nav>
-      <div className="border-t border-white/5 px-5 py-3 text-[11px] text-slate-500">Stand {__APP_VERSION__}</div>
+      <div className="border-t border-white/5 px-3 py-2">
+        <NavEntry it={SETTINGS} onNavigate={onNavigate} />
+      </div>
+      <div className="px-5 pb-3 text-[11px] text-slate-600">Stand {__APP_VERSION__}</div>
     </div>
   );
 }

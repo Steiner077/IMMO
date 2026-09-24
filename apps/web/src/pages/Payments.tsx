@@ -30,7 +30,7 @@ export function PaymentsPage() {
         subtitle={data ? `${data.total} Zahlungen · Summe ${chf(data.sumCents)}` : undefined}
         actions={
           <>
-            {can('payment:import') && <Link to="/zahlungen/import"><Button variant="secondary" icon={<Upload className="h-4 w-4" />}>Importieren</Button></Link>}
+            {can('payment:import') && <Link to="/zahlungen/import"><Button variant="secondary" icon={<Upload className="h-4 w-4" />}>Kontoauszug einlesen</Button></Link>}
             {can('finance:write') && <Button icon={<Plus className="h-4 w-4" />} onClick={() => setOpen(true)}>Zahlung erfassen</Button>}
           </>
         }
@@ -48,22 +48,31 @@ export function PaymentsPage() {
           <>
             <div className="overflow-x-auto">
               <table className="table-base">
-                <thead><tr><th>ID</th><th>Datum</th><th>Mieter / Zahler</th><th>Objekt</th><th className="num">Betrag</th><th className="num">Soll</th><th>Monat(e)</th><th>Quelle</th><th>Sicherheit</th><th>Status</th></tr></thead>
+                <thead><tr><th>Datum</th><th>Mieter</th><th>Monat</th><th className="num">Betrag</th><th>Status</th></tr></thead>
                 <tbody>
-                  {data.items.map((p) => (
-                    <tr key={p.id} className={`clickable ${p.reversedAt ? 'opacity-50' : ''}`} onClick={() => navigate(`/zahlungen/${p.id}`)}>
-                      <td className="font-mono text-xs text-slate-500">#{p.number}</td>
-                      <td>{formatDate(p.bookingDate)}</td>
-                      <td><p className="font-medium text-slate-900">{p.tenant ? tenantName(p.tenant) : '–'}</p><p className="text-xs text-slate-500">{p.payerName}</p></td>
-                      <td className="text-slate-600">{p.property ? `${p.property.name} · ${p.unit?.label}` : '–'}</td>
-                      <td className="num font-medium">{chf(p.amountCents)}</td>
-                      <td className="num text-slate-500">{p.expectedCents ? chf(p.expectedCents) : '–'}</td>
-                      <td className="text-xs text-slate-600">{p.assignments.map((a) => formatPeriod(a.rentCharge.period)).join(', ') || '–'}</td>
-                      <td className="text-xs text-slate-500">{PAYMENT_SOURCES[p.source as keyof typeof PAYMENT_SOURCES]}</td>
-                      <td>{p.confidence !== null ? <ConfidenceBar value={p.confidence} /> : <span className="text-xs text-slate-400">manuell</span>}</td>
-                      <td><PaymentBadge status={p.status} /></td>
-                    </tr>
-                  ))}
+                  {data.items.map((p) => {
+                    const name = p.tenant ? tenantName(p.tenant) : null;
+                    const payerDiffers = p.payerName && name && p.payerName.toLowerCase() !== name.toLowerCase();
+                    const diff = p.expectedCents ? p.amountCents - p.expectedCents : 0;
+                    return (
+                      <tr key={p.id} className={`clickable ${p.reversedAt ? 'opacity-50' : ''}`} onClick={() => navigate(`/zahlungen/${p.id}`)}>
+                        <td className="whitespace-nowrap">
+                          {formatDate(p.bookingDate)}
+                          <p className="text-xs text-slate-400">#{p.number} · {PAYMENT_SOURCES[p.source as keyof typeof PAYMENT_SOURCES]}</p>
+                        </td>
+                        <td>
+                          <p className="font-medium text-slate-900">{name ?? p.payerName ?? '–'}</p>
+                          <p className="text-xs text-slate-500">{[p.property && `${p.property.name} · ${p.unit?.label}`, payerDiffers && `Zahler: ${p.payerName}`].filter(Boolean).join(' · ')}</p>
+                        </td>
+                        <td className="text-sm text-slate-600">{p.assignments.map((a) => formatPeriod(a.rentCharge.period)).join(', ') || '–'}</td>
+                        <td className="num whitespace-nowrap">
+                          <p className="font-medium">{chf(p.amountCents)}</p>
+                          {diff !== 0 && <p className={`text-xs ${diff < 0 ? 'text-amber-700' : 'text-violet-700'}`}>{diff < 0 ? `${chf(-diff)} zu wenig` : `${chf(diff)} zu viel`}</p>}
+                        </td>
+                        <td><PaymentBadge status={p.status} /></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

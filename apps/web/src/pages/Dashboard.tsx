@@ -1,13 +1,13 @@
-import { AlertTriangle, Building2, CalendarClock, CheckSquare, Home, KeyRound, Wallet, Wrench } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { AlertTriangle, CheckSquare, Home, Upload, Users, Wallet } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { MONTH_NAMES_DE } from '@immo/shared';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { chf, chfShort, formatDate, formatDateTime, formatPeriod, tenantName } from '@/lib/format';
 import type { TenantRef } from '@/lib/types';
-import { Card, EmptyState, Loading, PageHeader, StatCard } from '@/components/ui';
+import { Button, Card, EmptyState, Loading, PageHeader, StatCard } from '@/components/ui';
 import { DamageBadge, PriorityBadge } from '@/components/StatusBadge';
 import { AXIS, GRID, SERIES } from '@/components/charts/theme';
 import { MoneyTooltip } from '@/components/charts/ChartTooltip';
@@ -31,18 +31,28 @@ const shortMonth = (p: string) => MONTH_NAMES_DE[+p.slice(5, 7) - 1].slice(0, 3)
 
 export function DashboardPage() {
   const { user, can } = useAuth();
+  const navigate = useNavigate();
   const { data, isLoading } = useQuery({ queryKey: ['dashboard'], queryFn: () => api<DashboardData>('/dashboard') });
   if (isLoading || !data) return <Loading />;
   const k = data.kpis;
   const fin = can('finance:read') && k.dueCents !== undefined;
   const paidPct = fin && k.dueCents ? Math.round(((k.paidCents ?? 0) / k.dueCents) * 100) : 0;
   const hour = new Date().getHours();
+  // Leere Monate vor den ersten Daten ausblenden
+  const firstWithData = data.incomeByMonth?.findIndex((m) => m.dueCents || m.paidCents) ?? -1;
+  const income = firstWithData > 0 ? data.incomeByMonth!.slice(firstWithData) : data.incomeByMonth;
 
   return (
     <>
       <PageHeader
         title={`${hour < 11 ? 'Guten Morgen' : hour < 18 ? 'Guten Tag' : 'Guten Abend'}, ${user?.firstName}`}
-        subtitle={`Übersicht ${formatPeriod(data.period)} · Stand ${formatDateTime(new Date())}`}
+        subtitle={`Übersicht ${formatPeriod(data.period)}`}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            {can('tenant:write') && <Button variant="secondary" icon={<Users className="h-4 w-4" />} onClick={() => navigate('/mieter')}>Mieter</Button>}
+            {can('payment:import') && <Button icon={<Upload className="h-4 w-4" />} onClick={() => navigate('/zahlungen/import')}>Kontoauszug einlesen</Button>}
+          </div>
+        }
       />
 
       {fin && !!k.pendingReview && (
@@ -52,22 +62,11 @@ export function DashboardPage() {
         </Link>
       )}
 
-      {fin && (
-        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-          <StatCard label="Soll-Miete (Monat)" value={chf(k.dueCents)} sub={formatPeriod(data.period)} icon={<Wallet className="h-4 w-4" />} to="/monatsabschluss" />
-          <StatCard label="Erhaltene Miete" value={chf(k.paidCents)} sub={`${paidPct} % des Solls`} tone="good" to="/monatsabschluss" />
-          <StatCard label="Offene Miete" value={chf(k.openCents)} sub="im laufenden Monat" tone={k.openCents ? 'warn' : 'default'} to="/monatsabschluss" />
-          <StatCard label="Überfällige Zahlungen" value={chf(k.overdueCents)} sub={`${k.overdueCount} Monatsmiete(n)`} tone={k.overdueCents ? 'bad' : 'default'} icon={<AlertTriangle className="h-4 w-4" />} to="/monatsabschluss" />
-          <StatCard label="Auslaufende Verträge" value={k.expiringLeases} sub="in den nächsten 90 Tagen" icon={<CalendarClock className="h-4 w-4" />} to="/mietvertraege" />
-        </div>
-      )}
-      <div className={`mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 ${fin ? "xl:grid-cols-5" : "xl:grid-cols-6"}`}>
-        <StatCard label="Immobilien" value={k.propertyCount} icon={<Building2 className="h-4 w-4" />} to="/immobilien" />
-        <StatCard label="Mietobjekte" value={k.unitCount} sub={`${k.vacancies} leer`} icon={<Home className="h-4 w-4" />} to="/immobilien" />
-        <StatCard label="Aktive Mietverhältnisse" value={k.activeLeases} icon={<KeyRound className="h-4 w-4" />} to="/mietvertraege" />
-        <StatCard label="Offene Mängel" value={k.openDamages} tone={k.openDamages ? 'warn' : 'default'} icon={<Wrench className="h-4 w-4" />} to="/maengel" />
-        <StatCard label="Offene Aufgaben" value={k.openTasks} icon={<CheckSquare className="h-4 w-4" />} to="/aufgaben" />
-        {!fin && <StatCard label="Auslaufende Verträge" value={k.expiringLeases} icon={<CalendarClock className="h-4 w-4" />} />}
+      <div className="mb-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {fin && <StatCard label={`Miete ${formatPeriod(data.period)}`} value={chf(k.paidCents)} sub={`von ${chf(k.dueCents)} erhalten (${paidPct} %)`} tone={paidPct >= 100 ? 'good' : 'default'} icon={<Wallet className="h-4 w-4" />} to="/monatsabschluss" />}
+        {fin && <StatCard label="Noch offen" value={chf((k.openCents ?? 0) + (k.overdueCents ?? 0))} sub={k.overdueCents ? `davon ${chf(k.overdueCents)} überfällig` : 'nichts überfällig'} tone={k.overdueCents ? 'bad' : k.openCents ? 'warn' : 'good'} icon={<AlertTriangle className="h-4 w-4" />} to="/monatsabschluss" />}
+        <StatCard label="Vermietet" value={`${k.unitCount - k.vacancies} / ${k.unitCount}`} sub={k.vacancies ? `${k.vacancies} frei` : 'alles vermietet'} icon={<Home className="h-4 w-4" />} to="/immobilien" />
+        <StatCard label="Zu erledigen" value={k.openDamages + k.openTasks + k.expiringLeases} sub={[k.openDamages && `${k.openDamages} Mängel`, k.openTasks && `${k.openTasks} Aufgaben`, k.expiringLeases && `${k.expiringLeases} Vertragsende`].filter(Boolean).join(' · ') || 'nichts offen'} tone={k.openDamages ? 'warn' : 'default'} icon={<CheckSquare className="h-4 w-4" />} to="/maengel" />
       </div>
 
       {fin && data.incomeByMonth && (
@@ -75,7 +74,7 @@ export function DashboardPage() {
           <Card title="Mieteinnahmen pro Monat – Soll gegen Ist" className="xl:col-span-2">
             <div className="h-72">
               <ResponsiveContainer>
-                <BarChart data={data.incomeByMonth} barGap={2} margin={{ left: 8, right: 8 }}>
+                <BarChart data={income} barGap={2} margin={{ left: 8, right: 8 }}>
                   <CartesianGrid vertical={false} stroke={GRID} />
                   <XAxis dataKey="period" tickFormatter={shortMonth} tick={AXIS.tick} stroke={AXIS.stroke} tickLine={false} />
                   <YAxis tickFormatter={(v) => chfShort(v)} tick={AXIS.tick} axisLine={false} tickLine={false} width={48} />
@@ -109,8 +108,8 @@ export function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 xl:grid-cols-2">
-        {fin && data.byProperty && (
+      <div className="mb-6">
+        {fin && data.byProperty && k.propertyCount > 1 && (
           <Card title={`Einnahmen und Kosten pro Immobilie (${new Date().getFullYear()})`}>
             <div className="h-64">
               <ResponsiveContainer>
@@ -127,21 +126,6 @@ export function DashboardPage() {
             </div>
           </Card>
         )}
-        <Card title="Mängelentwicklung (12 Monate)">
-          <div className="h-64">
-            <ResponsiveContainer>
-              <LineChart data={data.damageTrend} margin={{ left: 0, right: 16 }}>
-                <CartesianGrid vertical={false} stroke={GRID} />
-                <XAxis dataKey="period" tickFormatter={shortMonth} tick={AXIS.tick} stroke={AXIS.stroke} tickLine={false} />
-                <YAxis allowDecimals={false} tick={AXIS.tick} axisLine={false} tickLine={false} width={28} />
-                <Tooltip content={<MoneyTooltip money={false} labelFormatter={formatPeriod} />} />
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
-                <Line dataKey="created" name="Neu gemeldet" stroke={SERIES.secondary} strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 5 }} />
-                <Line dataKey="resolved" name="Erledigt" stroke={SERIES.tertiary} strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 5 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">

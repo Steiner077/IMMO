@@ -48,7 +48,7 @@ export function ImportsPage() {
   };
   return (
     <>
-      <PageHeader title="Zahlungen importieren" subtitle="Kontoauszug als PDF, Scan oder Foto hochladen – oder den Text einfügen. Das System erkennt Zahlungen, ordnet sie Mietern und Monaten zu und zeigt eine Vorschau." />
+      <PageHeader title="Kontoauszug einlesen" subtitle="PDF, Scan oder Foto hochladen – das Programm erkennt die Zahlungen und ordnet sie Mietern und Monaten zu. Verbucht wird erst nach Ihrer Bestätigung." />
       <Tabs value={mode} onChange={(k) => setMode(k as 'file' | 'paste')} tabs={[{ key: 'file', label: <span className="flex items-center gap-2"><UploadCloud className="h-4 w-4" />PDF, Scan oder Foto</span> }, { key: 'paste', label: <span className="flex items-center gap-2"><ClipboardPaste className="h-4 w-4" />Text einfügen</span> }]} />
       {mode === 'paste' ? (
         <Card className="mb-6">
@@ -198,7 +198,7 @@ export function ImportDetailPage() {
           <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
             <CalendarRange className="h-4 w-4 shrink-0" />
             <p className="min-w-0 flex-1">
-              <b>Jahresauszug:</b> {early.length} Zahlungen liegen vor dem Abrechnungsbeginn der Verträge (ab {formatDate(first)}). Sollen die Monatsmieten für diese Monate nachgetragen und die Zahlungen den richtigen Monaten zugeordnet werden? (nie vor Mietbeginn)
+              <b>{early.length} Zahlung(en) sind älter als die erfassten Monatsmieten</b> (ab {formatDate(first)}). Mit «Monate nachtragen» werden die fehlenden Monatsmieten angelegt und die Zahlungen dem richtigen Monat zugeordnet – nie vor Mietbeginn.
             </p>
             {editable && can('lease:write') && !b.rows.some((r) => r.status === 'POSTED') && (
               <Button size="sm" loading={backfill.isPending} onClick={() => backfill.mutate(undefined)}>Monate nachtragen</Button>
