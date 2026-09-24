@@ -20,6 +20,8 @@ import { runPostPostingAutomations } from '../automation/hooks.js';
 import type { AuthUser } from '../auth/context.js';
 import type { FastifyRequest } from 'fastify';
 import { logger } from '../lib/logger.js';
+import { aiEnabled } from './ai.js';
+import { parseStatementWithAI } from './statement-ai.js';
 
 const OCR_HINT = 'Per Texterkennung (OCR) aus einem Scan/Foto gelesen – Beträge ohne Saldo-Bestätigung bitte besonders prüfen.';
 
@@ -34,10 +36,44 @@ async function ocrOrExplain(read: () => Promise<import('../import/types.js').Tex
   return res;
 }
 
-export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer, fileName = ''): Promise<ParseResult> {
+/** Regelbasiertes Ergebnis unbrauchbar? (nichts erkannt oder Beträge widersprechen dem Saldo) */
+function weak(res: ParseResult) {
+  const bc = res.meta.balanceCheck;
+  return res.transactions.length === 0 || (!!bc && bc.checked > 0 && bc.verified < bc.checked);
+}
+
+const IMAGE_MIME: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+
+/** KI versuchen; bei Fehler das bisherige Ergebnis mit Hinweis behalten */
+async function tryAi(run: () => Promise<ParseResult>, fallback: ParseResult | null, force: boolean): Promise<ParseResult | null> {
+  try {
+    const res = await run();
+    if (res.transactions.length || force) return res;
+  } catch (e) {
+    if (force && !fallback) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn({ err: e }, 'KI-Auslesen des Auszugs fehlgeschlagen');
+    fallback?.meta.warnings.push(`KI-Auslesen nicht möglich: ${msg}`);
+  }
+  return null;
+}
+
+/**
+ * Datei → Buchungen. Reihenfolge: eigener Leser (kostenlos, exakt) → bei schwachem Ergebnis
+ * die KI (jedes Bankformat, Scans, Fotos) → sonst Texterkennung (OCR).
+ * mode "force": direkt mit KI lesen; "off": nie KI.
+ */
+export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer, fileName = '', mode: 'auto' | 'force' | 'off' = 'auto'): Promise<ParseResult> {
+  const useAi = mode !== 'off' && aiEnabled();
+  const force = mode === 'force' && useAi;
   if (fileType === 'PDF') {
     const lines = await extractPdfLines(data);
     const res = parseStatementLines(lines);
+    if (!force && !weak(res)) return res;
+    if (useAi) {
+      const viaAi = await tryAi(() => parseStatementWithAI({ data, mimetype: 'application/pdf' }), res, force);
+      if (viaAi) return viaAi;
+    }
     // Kein oder kaum Text: eingescannter Ausdruck → Texterkennung
     if (lines.length < 5 || res.transactions.length === 0) {
       const ocr = await ocrOrExplain(() => ocrPdf(data), 'Das PDF');
@@ -45,12 +81,25 @@ export async function parseFile(fileType: ImportBatch['fileType'], data: Buffer,
     }
     return res;
   }
-  if (fileType === 'IMAGE') return ocrOrExplain(() => ocrImage(data, (fileName.match(/\.\w+$/)?.[0] ?? '.png').toLowerCase()), 'Das Bild');
+  if (fileType === 'IMAGE') {
+    const ext = (fileName.match(/\.\w+$/)?.[0] ?? '.png').toLowerCase();
+    if (useAi && IMAGE_MIME[ext]) {
+      const viaAi = await tryAi(() => parseStatementWithAI({ data, mimetype: IMAGE_MIME[ext] }), null, force);
+      if (viaAi) return viaAi;
+    }
+    return ocrOrExplain(() => ocrImage(data, ext), 'Das Bild');
+  }
   if (fileType === 'TEXT') {
-    const res = parseStatementText(data.toString('utf8'));
-    if (res.transactions.length) return res;
+    const text = data.toString('utf8');
+    const res = parseStatementText(text);
+    if (!force && !weak(res)) return res;
     const csv = parseCsvBuffer(data); // .txt kann auch ein Tabellen-Export sein
-    return csv.transactions.length ? csv : res;
+    if (!force && csv.transactions.length) return csv;
+    if (useAi) {
+      const viaAi = await tryAi(() => parseStatementWithAI({ text }), res, force);
+      if (viaAi) return viaAi;
+    }
+    return res;
   }
   if (fileType === 'CSV') return parseCsvBuffer(data);
   if (fileType === 'CAMT') return parseCamtBuffer(data);
@@ -109,12 +158,20 @@ export async function loadCandidates(organizationId: string): Promise<MatchCandi
 }
 
 /** Analysiert einen Import: Datei parsen → Buchungen erkennen → Mieter zuordnen → Vorschau erzeugen. */
-export async function analyzeBatch(batchId: string) {
+export async function analyzeBatch(batchId: string, mode: 'auto' | 'force' | 'off' = 'auto') {
   const batch = await prisma.importBatch.findUniqueOrThrow({ where: { id: batchId }, include: { document: true } });
   try {
     if (!batch.document) throw new Error('Importdatei fehlt');
     const data = await storage.get(batch.document.storageKey);
-    const parsed = await parseFile(batch.fileType, data, batch.fileName);
+    // KI-Ergebnis zwischenspeichern: erneutes Analysieren (z. B. nach "Monate nachtragen") kostet nichts
+    const cacheKey = `${batch.document.storageKey}.ki.json`;
+    let parsed: ParseResult;
+    if (mode === 'auto' && (batch.meta as { ai?: boolean } | null)?.ai && (await storage.exists(cacheKey))) {
+      parsed = JSON.parse((await storage.get(cacheKey)).toString('utf8'), (k, v) => (['bookingDate', 'valueDate'].includes(k) && v ? new Date(v) : v));
+    } else {
+      parsed = await parseFile(batch.fileType, data, batch.fileName, mode);
+      if (parsed.meta.ai) await storage.put(cacheKey, Buffer.from(JSON.stringify(parsed)));
+    }
     const settings = await getOrgSettings(batch.organizationId);
 
     // Sollstellungen bis zum Folgemonat sicherstellen (Vorauszahlungen)
@@ -182,9 +239,9 @@ export async function analyzeBatch(batchId: string) {
         if (m.status === 'READY') m.status = 'NEEDS_REVIEW';
       }
       // Gescannte Belege: ohne Saldo-Bestätigung nie automatisch "bereit"
-      if (parsed.meta.ocr && !t.verified && m.status === 'READY') {
+      if ((parsed.meta.ocr || parsed.meta.ai) && !t.verified && m.status === 'READY') {
         m.status = 'NEEDS_REVIEW';
-        m.reasons.push('Per Texterkennung gelesen – Betrag bitte kontrollieren');
+        m.reasons.push(parsed.meta.ai ? 'Von der KI gelesen – Betrag bitte kontrollieren' : 'Per Texterkennung gelesen – Betrag bitte kontrollieren');
       }
       // Mögliches Duplikat: gleicher Vertrag, gleicher Betrag, ±5 Tage bereits verbucht
       if (m.leaseId) {

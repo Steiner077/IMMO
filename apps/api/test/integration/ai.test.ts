@@ -23,6 +23,29 @@ const CONTRACT = {
   confidence: 92,
 };
 
+const STATEMENT = {
+  iban: 'CH93 0076 2011 6238 5295 7',
+  currency: 'CHF',
+  openingBalance: 1000,
+  closingBalance: 2800,
+  transactions: [
+    { bookingDate: '2026-11-02', valueDate: '2026-11-02', amount: 1850, direction: 'credit', counterpartyName: 'Peter Müller', counterpartyIban: null, reference: 'Miete November Wohnung 3A', balanceAfter: 2850 },
+    { bookingDate: '2026-11-03', valueDate: null, amount: 50, direction: 'debit', counterpartyName: 'Kontoführung', counterpartyIban: null, reference: null, balanceAfter: 2800 },
+  ],
+};
+
+function sse(res: import('node:http').ServerResponse, text: string) {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'request-id': 'req_mock' });
+  const ev = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...(data as object) })}\n\n`);
+  ev('message_start', { message: { ...reply([], null as unknown as string), usage: { input_tokens: 10, output_tokens: 1 } } });
+  ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+  ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text } });
+  ev('content_block_stop', { index: 0 });
+  ev('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
+  ev('message_stop', {});
+  res.end();
+}
+
 function reply(content: unknown[], stop_reason: string) {
   return { id: `msg_${requests.length}`, type: 'message', role: 'assistant', model: 'claude-opus-5', content, stop_reason, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 10 } };
 }
@@ -35,6 +58,9 @@ beforeAll(async () => {
       const body = JSON.parse(raw || '{}');
       requests.push({ ...body, _headers: req.headers });
       let out;
+      if (body.output_config?.format?.schema?.properties?.transactions) {
+        return sse(res, JSON.stringify(STATEMENT));
+      }
       if (body.output_config?.format) {
         out = reply([{ type: 'text', text: JSON.stringify(CONTRACT) }], 'end_turn');
       } else {
@@ -168,5 +194,42 @@ describe('Mietvertrag aus PDF', () => {
     const dup = await app.inject({ method: 'POST', url: '/api/v1/leases/from-contract', headers: auth, payload: { documentId, tenant: { lastName: 'Doppelt' }, unitId: match.unitId, lease: { startDate: '2026-11-01', netRentCents: 100000 } } });
     expect(dup.statusCode).toBe(409);
     expect((await app.inject({ method: 'GET', url: '/api/v1/tenants?status=all', headers: auth })).json().length).toBe(tenantsBefore);
+  });
+});
+
+describe('Kontoauszug mit KI', () => {
+  it('liest ein unbekanntes Bankformat per KI, prüft per Saldo und speichert das Ergebnis zwischen', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const before = requests.length;
+    const up = await app.inject({ method: 'POST', url: '/api/v1/imports/text', headers: auth, payload: { text: 'Kontobewegungen Muster-Bank\nPos 1 · Eingang · siehe Beleg\nPos 2 · Spesen' } });
+    expect(up.statusCode, up.body).toBe(200);
+    const wait = async () => {
+      let b: any;
+      for (let i = 0; i < 50; i++) {
+        b = (await app.inject({ method: 'GET', url: `/api/v1/imports/${up.json().id}`, headers: auth })).json();
+        if (b.status !== 'ANALYZING') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return b;
+    };
+    const b = await wait();
+    expect(b.meta.ai).toBe(true);
+    expect(b.meta.balanceCheck).toEqual({ verified: 2, checked: 2, corrected: 0 });
+    expect(b.rows).toHaveLength(2);
+    const credit = b.rows.find((r: any) => r.isCredit);
+    expect(credit.payerName).toBe('Peter Müller');
+    expect(credit.amountCents).toBe(185000);
+    expect(credit.balanceVerified).toBe(true);
+    expect(b.rows.find((r: any) => !r.isCredit).status).toBe('IGNORED');
+    const aiCalls = requests.length - before;
+    expect(aiCalls).toBe(1);
+    expect(requests[requests.length - 1].stream).toBe(true);
+
+    // erneut analysieren: Ergebnis aus dem Zwischenspeicher, kein weiterer KI-Aufruf
+    await app.inject({ method: 'POST', url: `/api/v1/imports/${b.id}/reanalyze`, headers: auth, payload: {} });
+    const again = await wait();
+    expect(again.rows).toHaveLength(2);
+    expect(requests.length - before).toBe(1);
   });
 });

@@ -131,8 +131,9 @@ export async function importRoutes(app: FastifyInstance) {
     const batch = await prisma.importBatch.findFirst({ where: { id, organizationId: req.user.organizationId } });
     if (!batch) throw notFound('Import');
     if (await prisma.importRow.count({ where: { batchId: id, status: 'POSTED' } })) throw conflict('Bereits teilweise verbucht – erneute Analyse nicht möglich.');
+    const { ai } = parse(z.object({ ai: z.boolean().default(false) }), req.body ?? {});
     await prisma.importBatch.update({ where: { id }, data: { status: 'ANALYZING' } });
-    setImmediate(() => void analyzeBatch(id));
+    setImmediate(() => void analyzeBatch(id, ai ? 'force' : 'auto'));
     return { ok: true };
   });
 

@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarRange, Camera, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
+import { AlertTriangle, CalendarRange, Camera, Sparkles, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, ScanLine, ShieldCheck, ShieldAlert, Trash2, UploadCloud } from 'lucide-react';
 import { Fragment, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -113,7 +113,7 @@ interface Row {
   status: string; confirmed: boolean; corrected: boolean; balanceVerified: boolean | null; tenant: TenantRef | null; unit: { id: string; label: string } | null; property: { id: string; name: string } | null; monthlyCents: number | null;
   payment: { id: string; number: number } | null;
 }
-interface BatchDetail extends Omit<Batch, 'counts' | 'creditCents'> { meta: { format?: string; warnings?: string[]; iban?: string | null; ocr?: boolean; balanceCheck?: { verified: number; checked: number; corrected: number } | null }; rows: Row[] }
+interface BatchDetail extends Omit<Batch, 'counts' | 'creditCents'> { meta: { format?: string; warnings?: string[]; iban?: string | null; ocr?: boolean; ai?: boolean; balanceCheck?: { verified: number; checked: number; corrected: number } | null }; rows: Row[] }
 
 const STEPS = ['Zahlung erkennen', 'Zahler erkennen', 'Mieter suchen', 'Betrag vergleichen', 'Offene Monate prüfen', 'Monat bestimmen', 'Vertrag vergleichen', 'Sicherheit berechnen'];
 
@@ -137,6 +137,8 @@ export function ImportDetailPage() {
   const confirmReady = useAction(() => api<{ confirmed: number }>(`/imports/${id}/confirm-ready`, { body: {} }), { success: (r) => `${r.confirmed} sichere Zahlungen bestätigt`, invalidate: [key] });
   const post = useAction(() => api<{ posted: number; failed: { rowId: string; error: string }[]; totalCents: number }>(`/imports/${id}/post`, { body: {} }), { invalidate: inv, onSuccess: setResult });
   const reanalyze = useAction(() => api(`/imports/${id}/reanalyze`, { body: {} }), { success: 'Analyse neu gestartet', invalidate: [key] });
+  const reanalyzeAi = useAction(() => api(`/imports/${id}/reanalyze`, { body: { ai: true } }), { success: 'Die KI liest den Auszug – das kann bis zu einer Minute dauern', invalidate: [key] });
+  const { data: aiStatus } = useQuery({ queryKey: ['ai-status'], queryFn: () => api<{ enabled: boolean }>('/ai/status'), staleTime: 300_000 });
   const backfill = useAction(() => api<{ updated: number }>(`/imports/${id}/backfill-charges`, { body: {} }), { success: (r) => `Sollstellungen für ${r.updated} Verträge nachgetragen – Import neu zugeordnet`, invalidate: inv });
   const discard = useAction(() => api(`/imports/${id}/discard`, { body: {} }), { success: 'Import verworfen', invalidate: [['imports']], onSuccess: () => navigate('/zahlungen/import') });
 
@@ -173,6 +175,7 @@ export function ImportDetailPage() {
         subtitle={`Hochgeladen ${formatDateTime(b.createdAt)} · ${BATCH_STATUS[b.status]?.label}${b.meta.iban ? ` · Konto ${b.meta.iban}` : ''}`}
         actions={editable && b.status !== 'POSTED' && (
           <>
+            {aiStatus?.enabled && !b.meta.ai && !b.rows.some((r) => r.status === 'POSTED') && ['PDF', 'IMAGE', 'TEXT'].includes(b.fileType) && <Button variant="secondary" icon={<Sparkles className="h-4 w-4" />} loading={reanalyzeAi.isPending} onClick={() => reanalyzeAi.mutate(undefined)}>Mit KI einlesen</Button>}
             {!b.rows.some((r) => r.status === 'POSTED') && <Button variant="ghost" icon={<RefreshCw className="h-4 w-4" />} onClick={() => reanalyze.mutate(undefined)}>Neu analysieren</Button>}
             {!b.rows.some((r) => r.status === 'POSTED') && <Button variant="ghost" icon={<Trash2 className="h-4 w-4" />} onClick={() => confirm('Import verwerfen?') && discard.mutate(undefined)}>Verwerfen</Button>}
           </>
@@ -182,7 +185,7 @@ export function ImportDetailPage() {
       {b.meta.balanceCheck && (
         <div className={`mb-3 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm ${b.meta.balanceCheck.verified === b.meta.balanceCheck.checked ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
           {b.meta.balanceCheck.verified === b.meta.balanceCheck.checked ? <ShieldCheck className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}
-          Saldo-Kontrolle: {b.meta.balanceCheck.verified} von {b.meta.balanceCheck.checked} Buchungen stimmen exakt mit dem Kontosaldo überein{b.meta.ocr ? ' (Texterkennung)' : ''}.
+          Saldo-Kontrolle: {b.meta.balanceCheck.verified} von {b.meta.balanceCheck.checked} Buchungen stimmen exakt mit dem Kontosaldo überein{b.meta.ai ? ' (von der KI gelesen)' : b.meta.ocr ? ' (Texterkennung)' : ''}.
         </div>
       )}
       {b.meta.warnings?.filter((w) => !w.startsWith('Saldo-Kontrolle: ') || !b.meta.balanceCheck).map((w) => <div key={w} className="mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><AlertTriangle className="h-4 w-4" />{w}</div>)}

@@ -38,6 +38,8 @@ export interface ParseResult {
     lineCount?: number;
     /** Text wurde per Texterkennung (OCR) gewonnen */
     ocr?: boolean;
+    /** Buchungen wurden von der KI ausgelesen */
+    ai?: boolean;
     /** Saldo-Kontrolle: bestätigte / geprüfte Buchungen */
     balanceCheck?: { verified: number; checked: number; corrected: number } | null;
   };
