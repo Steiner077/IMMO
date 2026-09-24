@@ -11,7 +11,7 @@ import type { Property, TenantRef } from '@/lib/types';
 import { Badge, Button, Card, EmptyState, Field, Input, KeyValue, Loading, Modal, PageHeader, Select, StatCard, Tabs, Textarea } from '@/components/ui';
 import { DocumentsPanel } from '@/components/DocumentsPanel';
 import { DamageList } from './Damages';
-import { TenantForm } from './Tenants';
+import { RentOutForm } from '@/components/RentOutForm';
 
 export function PropertiesPage() {
   const { can } = useAuth();
@@ -188,77 +188,6 @@ function PriceForm({ propertyId, units, onClose }: { propertyId: string; units: 
   );
 }
 
-/** Mieter wählen, Objekte ankreuzen, Preise bei Bedarf anpassen → Mietverträge anlegen */
-function RentOutForm({ units, onClose }: { units: UnitRow[]; onClose: () => void }) {
-  const { data: tenants } = useQuery({ queryKey: ['tenants', '', 'all'], queryFn: () => api<(TenantRef & { id: string })[]>('/tenants?status=all') });
-  const [tenantId, setTenantId] = useState('');
-  const [newTenant, setNewTenant] = useState(false);
-  const next = new Date();
-  next.setMonth(next.getMonth() + 1, 1);
-  const [startDate, setStartDate] = useState(next.toISOString().slice(0, 10));
-  const [rows, setRows] = useState(() => Object.fromEntries(units.map((u) => [u.id, { checked: false, rent: fromCents(u.targetRentCents), nk: '' }])));
-  const [errors, setErrors] = useState<string[]>([]);
-  const chosen = units.filter((u) => rows[u.id].checked);
-  const total = chosen.reduce((s, u) => s + toCents(rows[u.id].rent || '0') + toCents(rows[u.id].nk || '0'), 0);
-  const save = useAction(
-    async () => {
-      const failed: string[] = [];
-      let ok = 0;
-      for (const u of chosen) {
-        try {
-          await api('/leases', { body: { unitId: u.id, tenantId, startDate, netRentCents: toCents(rows[u.id].rent || '0'), utilitiesCents: toCents(rows[u.id].nk || '0') } });
-          ok++;
-        } catch (e) {
-          failed.push(`${u.label}: ${e instanceof Error ? e.message : 'Fehler'}`);
-        }
-      }
-      setErrors(failed);
-      if (failed.length) throw new Error(`${ok} von ${chosen.length} Verträgen angelegt`);
-      return ok;
-    },
-    { success: (n) => `${n} Mietverträge angelegt`, invalidate: [['property'], ['properties'], ['units'], ['tenants'], ['tenant'], ['leases'], ['dashboard']], onSuccess: onClose },
-  );
-  const set = (id: string, patch: Partial<(typeof rows)[string]>) => setRows({ ...rows, [id]: { ...rows[id], ...patch } });
-  return (
-    <>
-      <Modal
-        open
-        size="lg"
-        onClose={onClose}
-        title="Vermieten"
-        footer={<><Button variant="secondary" onClick={onClose}>Abbrechen</Button><Button disabled={!tenantId || !chosen.length || !startDate} loading={save.isPending} onClick={() => save.mutate(undefined)}>{chosen.length ? `${chosen.length} vermieten · ${chf(total)} / Monat` : 'Objekte ankreuzen'}</Button></>}
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Mieter">
-            <div className="flex gap-2">
-              <Select className="flex-1" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="Mieter wählen …" options={(tenants ?? []).map((t) => ({ value: t.id, label: tenantName(t) }))} />
-              <Button variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => setNewTenant(true)}>Neu</Button>
-            </div>
-          </Field>
-          <Field label="Mietbeginn"><Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
-        </div>
-        <table className="table-base mt-5">
-          <thead><tr><th /><th>Objekt</th><th>Art</th><th className="num">Miete netto (CHF)</th><th className="num">Nebenkosten (CHF)</th></tr></thead>
-          <tbody>
-            {units.map((u) => (
-              <tr key={u.id} className={rows[u.id].checked ? 'bg-brand-50/40' : ''}>
-                <td><input type="checkbox" aria-label={`${u.label} ankreuzen`} checked={rows[u.id].checked} onChange={(e) => set(u.id, { checked: e.target.checked })} /></td>
-                <td className="font-medium text-slate-900" onClick={() => set(u.id, { checked: !rows[u.id].checked })}>{u.label}</td>
-                <td>{UNIT_TYPES[u.type as keyof typeof UNIT_TYPES]}</td>
-                <td className="num"><Input className="w-28 text-right" inputMode="decimal" value={rows[u.id].rent} placeholder="0.00" onChange={(e) => set(u.id, { rent: e.target.value, checked: true })} /></td>
-                <td className="num"><Input className="w-28 text-right" inputMode="decimal" value={rows[u.id].nk} placeholder="0.00" onChange={(e) => set(u.id, { nk: e.target.value, checked: true })} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="mt-3 text-xs text-slate-500">Die Preise kommen aus «Preise». Individuelle Abweichungen einfach hier eintragen. Details wie Kaution, Kündigungsfrist oder Zahlungsreferenz können Sie danach im Mietvertrag unter «Bearbeiten» ändern.</p>
-        {errors.map((e) => <p key={e} className="mt-2 text-sm text-red-700">{e}</p>)}
-      </Modal>
-      {newTenant && <TenantForm onClose={() => setNewTenant(false)} onCreated={(id) => { setTenantId(id); setNewTenant(false); }} />}
-    </>
-  );
-}
-
 interface PropertyDetail extends Record<string, unknown> {
   id: string; name: string; street: string; zip: string; city: string; type: string; yearBuilt: number | null; description: string | null; tenantInfo: string | null; purchasePriceCents: number | null;
   units: { id: string; label: string; type: string; floor: string | null; rooms: string | null; areaM2: string | null; targetRentCents: number | null; leases: { id: string; netRentCents: number; utilitiesCents: number; endDate: string | null; status: string; tenant: TenantRef }[] }[];
@@ -301,7 +230,7 @@ export function PropertyDetailPage() {
       {tab === 'units' && (
         <Card title="Wohnungen und Mietobjekte" actions={
           <div className="flex flex-wrap gap-2">
-            {can('lease:write') && units.some((u) => !u.leases.length) && <Button size="sm" icon={<KeyRound className="h-4 w-4" />} onClick={() => setRentOpen(true)}>Vermieten</Button>}
+            {can('lease:write') && <Button size="sm" icon={<KeyRound className="h-4 w-4" />} disabled={!units.some((u) => !u.leases.length)} title="Freie Objekte an einen Mieter vermieten" onClick={() => setRentOpen(true)}>Vermieten</Button>}
             {can('unit:write') && fin && <Button size="sm" variant="secondary" icon={<Tags className="h-4 w-4" />} onClick={() => setPricesOpen(true)}>Preise</Button>}
             {can('unit:write') && <Button size="sm" variant="secondary" icon={<Car className="h-4 w-4" />} onClick={() => setBulkOpen(true)}>Mehrere Parkplätze/Garagen</Button>}
             {can('unit:write') && <Button size="sm" variant="secondary" icon={<Plus className="h-4 w-4" />} onClick={() => setUnitOpen(true)}>Objekt hinzufügen</Button>}
