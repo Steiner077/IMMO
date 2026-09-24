@@ -1,14 +1,68 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { idParam, optStr, pagination, parse } from '../lib/http.js';
-import { notFound } from '../lib/errors.js';
-import { propertyIdFilter, requirePermission, scopedPropertyId } from '../auth/context.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { assertPropertyAccess, propertyIdFilter, requirePermission, scopedPropertyId } from '../auth/context.js';
 import { createPayment, reassignPayment, reversePayment } from '../services/payments.js';
 import { allocatePreferring } from '../import/allocation.js';
+import { detectPeriods } from '../import/matching.js';
+import { ensureChargesForLease } from '../services/charges.js';
+import { auditReq } from '../services/audit.js';
+import { addMonths, formatPeriod, toPeriod } from '@immo/shared';
 
 const allocationSchema = z.array(z.object({ chargeId: z.string(), amountCents: z.coerce.number().int().positive() }));
+
+async function autoAssign(id: string, req: FastifyRequest) {
+  const p = await prisma.payment.findFirst({
+    where: { id, organizationId: req.user.organizationId },
+    include: { assignments: true, lease: true },
+  });
+  if (!p) throw notFound('Zahlung');
+  if (p.reversedAt) throw conflict('Stornierte Zahlungen können nicht geändert werden.');
+  if (!p.lease) throw badRequest('Bitte zuerst einen Mieter wählen («Umbuchen»).');
+  assertPropertyAccess(req.user, (await prisma.unit.findUniqueOrThrow({ where: { id: p.lease.unitId } })).propertyId);
+  const assigned = p.assignments.reduce((s, a) => s + a.amountCents, 0);
+  const rest = p.amountCents - assigned;
+  if (rest <= 0) return { status: p.status, added: 0, message: 'Bereits vollständig zugeordnet.' };
+
+  // Monat: aus der Mitteilung, sonst Buchungsmonat (ab dem 20. → Folgemonat, Vorauszahlung)
+  const bookingPeriod = toPeriod(p.bookingDate);
+  const period = detectPeriods(`${p.reference ?? ''} ${p.rawText ?? ''}`, p.bookingDate)[0] ?? (p.bookingDate.getUTCDate() >= 20 ? addMonths(bookingPeriod, 1) : bookingPeriod);
+
+  // Fehlende Monatsmieten bis zu diesem Monat nachtragen
+  // nur der Vertrag der Zahlung – sonst entstünden z. B. beim Parkplatz künstliche Rückstände
+  const leases = [p.lease];
+  const monthStart = new Date(`${period}-01T00:00:00Z`);
+  let backfilled = 0;
+  for (const l of leases) {
+    const from = monthStart < l.startDate ? l.startDate : monthStart;
+    if (l.chargesFrom && l.chargesFrom > from && (!l.endDate || from <= l.endDate)) {
+      await prisma.lease.update({ where: { id: l.id }, data: { chargesFrom: from } });
+      await auditReq(req, { action: 'lease.charges_backfill', entityType: 'Lease', entityId: l.id, summary: `Monatsmieten ab ${period} nachgetragen (Zahlung #${p.number})`, oldValues: { chargesFrom: l.chargesFrom }, newValues: { chargesFrom: from } });
+      backfilled++;
+    }
+    // bis zum Zahlungsmonat (Vorauszahlung), höchstens 12 Monate im Voraus
+    const horizon = addMonths(toPeriod(new Date()), 1);
+    const until = period > horizon && period <= addMonths(toPeriod(new Date()), 12) ? period : horizon;
+    await ensureChargesForLease(prisma, { ...l, chargesFrom: l.chargesFrom && l.chargesFrom > from ? from : l.chargesFrom }, until);
+  }
+
+  const charges = await prisma.rentCharge.findMany({
+    where: { lease: { tenantId: p.lease.tenantId }, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] }, id: { notIn: p.assignments.map((a) => a.rentChargeId) } },
+    include: { lease: { select: { unit: { select: { label: true } } } } },
+    orderBy: { period: 'asc' },
+  });
+  const toOpen = (c: (typeof charges)[number]) => ({ id: c.id, period: c.period, outstandingCents: c.amountCents - c.paidCents, label: c.lease.unit.label });
+  // ab dem Zahlungsmonat zuordnen (nicht rückwirkend ältere Schulden), Monate des Vertrags zuerst
+  const fromPeriod = charges.filter((c) => c.period >= period);
+  const plan = allocatePreferring(rest, fromPeriod.filter((c) => c.leaseId === p.leaseId).map(toOpen), fromPeriod.filter((c) => c.leaseId !== p.leaseId).map(toOpen), period);
+  if (!plan.lines.length) return { status: p.status, added: 0, message: `Ab ${formatPeriod(period)} ist nichts offen – der Betrag bleibt als Guthaben.` };
+  const allocations = [...p.assignments.map((a) => ({ chargeId: a.rentChargeId, amountCents: a.amountCents })), ...plan.lines.map((l) => ({ chargeId: l.chargeId, amountCents: l.amountCents }))];
+  const r = await reassignPayment(id, { leaseId: p.leaseId, allocations, reason: 'Automatisch zugeordnet' }, { user: req.user, req });
+  return { ...r, added: plan.lines.length, backfilled, periods: [...new Set(plan.lines.map((l) => l.period))] };
+}
 
 export async function paymentRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: requirePermission('finance:read') }, async (req) => {
@@ -122,6 +176,32 @@ export async function paymentRoutes(app: FastifyInstance) {
       req.body,
     );
     return createPayment({ ...body, organizationId: req.user.organizationId, source: 'MANUAL' }, { user: req.user, req });
+  });
+
+  /**
+   * "Automatisch zuordnen": offenen Betrag auf den passenden Monat verteilen.
+   * Fehlt die Monatsmiete (z. B. Zahlung vor dem Abrechnungsbeginn), wird sie nachgetragen – nie vor Mietbeginn.
+   */
+  app.post('/:id/auto-assign', { preHandler: requirePermission('finance:write') }, async (req) => autoAssign(parse(idParam, req.params).id, req));
+
+  /** Alle Zahlungen "Zuordnung prüfen" auf einmal automatisch zuordnen */
+  app.post('/auto-assign-all', { preHandler: requirePermission('finance:write') }, async (req) => {
+    const list = await prisma.payment.findMany({
+      where: { organizationId: req.user.organizationId, status: { in: ['REVIEW', 'PARTIAL', 'OVERPAID'] }, reversedAt: null, leaseId: { not: null }, propertyId: propertyIdFilter(req.user) },
+      orderBy: { bookingDate: 'asc' },
+      select: { id: true, number: true },
+    });
+    let assigned = 0;
+    const failed: string[] = [];
+    for (const p of list) {
+      try {
+        const r = await autoAssign(p.id, req);
+        if (r.added) assigned++;
+      } catch (e) {
+        failed.push(`#${p.number}: ${e instanceof Error ? e.message : 'Fehler'}`);
+      }
+    }
+    return { checked: list.length, assigned, failed };
   });
 
   app.post('/:id/reassign', { preHandler: requirePermission('finance:write') }, async (req) => {

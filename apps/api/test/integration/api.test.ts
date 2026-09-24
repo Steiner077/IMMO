@@ -263,6 +263,27 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(dec.rows.some((r: { tenant: { lastName: string } }) => r.tenant.lastName === 'Wyss')).toBe(false);
   });
 
+  it('Zahlung «Zuordnung prüfen» automatisch zuordnen – fehlender Monat wird nachgetragen', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const props = (await get(t, '/api/v1/properties')).json();
+    const bulk = await app.inject({ method: 'POST', url: `/api/v1/properties/${props[0].id}/units/bulk`, headers: auth, payload: { prefix: 'AZ', from: 1, to: 1, type: 'GARAGE' } });
+    expect(bulk.statusCode).toBe(200);
+    const unit = (await get(t, `/api/v1/units?propertyId=${props[0].id}`)).json().find((u: { label: string }) => u.label === 'AZ1');
+    const tenant = (await app.inject({ method: 'POST', url: '/api/v1/tenants', headers: auth, payload: { firstName: 'Rita', lastName: 'Zuordnung' } })).json();
+    const lease = (await app.inject({ method: 'POST', url: '/api/v1/leases', headers: auth, payload: { unitId: unit.id, tenantId: tenant.id, startDate: '2025-01-01', netRentCents: 10000 } })).json();
+    // Zahlung vom März 2025 – Monatsmieten im Programm beginnen erst später
+    const pay = (await app.inject({ method: 'POST', url: '/api/v1/payments', headers: auth, payload: { leaseId: lease.id, bookingDate: '2025-03-03', amountCents: 10000, reference: 'Miete Garage März 2025', allocations: [] } })).json();
+    expect(pay.status).toBe('REVIEW');
+    const r = (await app.inject({ method: 'POST', url: `/api/v1/payments/${pay.id}/auto-assign`, headers: auth, payload: {} })).json();
+    expect(r).toMatchObject({ added: 1, backfilled: 1, periods: ['2025-03'], status: 'ASSIGNED' });
+    // Februar wurde NICHT nachgetragen (keine künstlichen Rückstände)
+    const feb = (await get(t, '/api/v1/monthly/2025-02')).json();
+    expect(feb.rows.some((x: { tenant: { lastName: string } }) => x.tenant.lastName === 'Zuordnung')).toBe(false);
+    const all = (await app.inject({ method: 'POST', url: '/api/v1/payments/auto-assign-all', headers: auth, payload: {} })).json();
+    expect(all).toHaveProperty('checked');
+  });
+
   it('Stornierte Zahlung setzt den Monat wieder auf offen', async () => {
     const t = await login('verwaltung@immo.local');
     const auth = { authorization: `Bearer ${t}` };

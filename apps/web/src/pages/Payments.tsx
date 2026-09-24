@@ -1,6 +1,6 @@
-import { Plus, RotateCcw, Search, Shuffle, Upload } from 'lucide-react';
+import { Check, Plus, RotateCcw, Search, Shuffle, Upload } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { PAYMENT_METHODS, PAYMENT_SOURCES, PAYMENT_STATUS } from '@immo/shared';
 import { api, openInline } from '@/lib/api';
@@ -23,6 +23,16 @@ export function PaymentsPage() {
   const [open, setOpen] = useState(false);
   const qs = new URLSearchParams({ page: String(page), pageSize: '50', ...(search && { search }), ...(status && { status }), ...(source && { source }) });
   const { data, isLoading } = useQuery({ queryKey: ['payments', qs.toString()], queryFn: () => api<{ items: Payment[]; total: number; sumCents: number; page: number; pageSize: number }>(`/payments?${qs}`) });
+  const { data: review } = useQuery({ queryKey: ['payments', 'review-count'], queryFn: () => api<{ total: number }>('/payments?status=REVIEW&pageSize=1') });
+  const inv = [['payments'], ['payment'], ['dashboard'], ['monthly'], ['tenant']];
+  const autoOne = useAction((pid: string) => api<{ added: number; periods?: string[]; message?: string }>(`/payments/${pid}/auto-assign`, { body: {} }), {
+    success: (r) => (r.added ? `Zugeordnet: ${(r.periods ?? []).map(formatPeriod).join(', ')}` : r.message ?? 'Nichts zuzuordnen'),
+    invalidate: inv,
+  });
+  const autoAll = useAction(() => api<{ checked: number; assigned: number; failed: string[] }>('/payments/auto-assign-all', { body: {} }), {
+    success: (r) => `${r.assigned} von ${r.checked} Zahlungen zugeordnet${r.failed.length ? ` – ${r.failed.length} bitte einzeln prüfen` : ''}`,
+    invalidate: inv,
+  });
   return (
     <>
       <PageHeader
@@ -35,6 +45,15 @@ export function PaymentsPage() {
           </>
         }
       />
+      {!!review?.total && can('finance:write') && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="min-w-0 flex-1">
+            <b>{review.total} Zahlung(en) «Zuordnung prüfen»:</b> Der Mieter ist bekannt, aber die Zahlung ist noch keinem Monat zugeordnet (z. B. weil die Monatsmiete im Programm erst später beginnt).
+          </p>
+          <Button size="sm" variant="secondary" onClick={() => { setStatus('REVIEW'); setPage(1); }}>Anzeigen</Button>
+          <Button size="sm" loading={autoAll.isPending} onClick={() => autoAll.mutate(undefined)}>Alle automatisch zuordnen</Button>
+        </div>
+      )}
       <Card bodyClassName="p-0">
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <div className="relative min-w-60 flex-1">
@@ -48,12 +67,13 @@ export function PaymentsPage() {
           <>
             <div className="overflow-x-auto">
               <table className="table-base">
-                <thead><tr><th>Datum</th><th>Mieter</th><th>Monat</th><th className="num">Betrag</th><th>Status</th></tr></thead>
+                <thead><tr><th>Datum</th><th>Mieter</th><th>Monat</th><th className="num">Betrag</th><th>Status</th><th /></tr></thead>
                 <tbody>
                   {data.items.map((p) => {
                     const name = p.tenant ? tenantName(p.tenant) : null;
                     const payerDiffers = p.payerName && name && p.payerName.toLowerCase() !== name.toLowerCase();
-                    const diff = p.expectedCents ? p.amountCents - p.expectedCents : 0;
+                    // nicht zugeordneter Rest (Guthaben); Teilzahlungen zeigt der Status
+                    const credit = p.assignments.length ? p.amountCents - p.assignments.reduce((a, x) => a + x.amountCents, 0) : 0;
                     return (
                       <tr key={p.id} className={`clickable ${p.reversedAt ? 'opacity-50' : ''}`} onClick={() => navigate(`/zahlungen/${p.id}`)}>
                         <td className="whitespace-nowrap">
@@ -64,12 +84,20 @@ export function PaymentsPage() {
                           <p className="font-medium text-slate-900">{name ?? p.payerName ?? '–'}</p>
                           <p className="text-xs text-slate-500">{[p.property && `${p.property.name} · ${p.unit?.label}`, payerDiffers && `Zahler: ${p.payerName}`].filter(Boolean).join(' · ')}</p>
                         </td>
-                        <td className="text-sm text-slate-600">{p.assignments.map((a) => formatPeriod(a.rentCharge.period)).join(', ') || '–'}</td>
+                        <td className="text-sm text-slate-600">{[...new Set(p.assignments.map((a) => a.rentCharge.period))].sort().map(formatPeriod).join(', ') || '–'}</td>
                         <td className="num whitespace-nowrap">
                           <p className="font-medium">{chf(p.amountCents)}</p>
-                          {diff !== 0 && <p className={`text-xs ${diff < 0 ? 'text-amber-700' : 'text-violet-700'}`}>{diff < 0 ? `${chf(-diff)} zu wenig` : `${chf(diff)} zu viel`}</p>}
+                          {credit > 0 && <p className="text-xs text-violet-700">{chf(credit)} Guthaben</p>}
                         </td>
                         <td><PaymentBadge status={p.status} /></td>
+                        <td className="text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                          {can('finance:write') && !p.reversedAt && p.status === 'REVIEW' && (
+                            <Button size="sm" variant="success" icon={<Check className="h-3.5 w-3.5" />} loading={autoOne.isPending && autoOne.variables === p.id} onClick={() => autoOne.mutate(p.id)}>Zuordnen</Button>
+                          )}
+                          {can('finance:write') && !p.reversedAt && p.status === 'UNCLEAR' && (
+                            <Button size="sm" variant="secondary" onClick={() => navigate(`/zahlungen/${p.id}?zuordnen=1`)}>Mieter wählen</Button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -124,9 +152,14 @@ interface PaymentDetail extends Payment {
 export function PaymentDetailPage() {
   const { id } = useParams();
   const { can } = useAuth();
-  const [reassign, setReassign] = useState(false);
+  const [params] = useSearchParams();
+  const [reassign, setReassign] = useState(params.get('zuordnen') === '1');
   const [reverse, setReverse] = useState(false);
   const { data: p, isLoading } = useQuery({ queryKey: ['payment', id], queryFn: () => api<PaymentDetail>(`/payments/${id}`) });
+  const auto = useAction(() => api<{ added: number; periods?: string[]; message?: string }>(`/payments/${id}/auto-assign`, { body: {} }), {
+    success: (r) => (r.added ? `Zugeordnet: ${(r.periods ?? []).map(formatPeriod).join(', ')}` : r.message ?? 'Nichts zuzuordnen'),
+    invalidate: [['payment', id!], ['payments'], ['dashboard'], ['monthly'], ['tenant']],
+  });
   if (isLoading || !p) return <Loading />;
   const assigned = p.assignments.reduce((s, a) => s + a.amountCents, 0);
   return (
@@ -143,6 +176,19 @@ export function PaymentDetailPage() {
         )}
       />
       {p.reversedAt && <div className="mb-5 rounded-xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-700">Storniert am {formatDateTime(p.reversedAt)}: {p.reversalReason}</div>}
+      {!p.reversedAt && can('finance:write') && ['REVIEW', 'UNCLEAR', 'PARTIAL', 'OVERPAID'].includes(p.status) && (
+        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="min-w-0 flex-1">
+            {p.status === 'UNCLEAR'
+              ? <><b>Kein Mieter zugeordnet.</b> Bitte den Mieter wählen.</>
+              : p.status === 'REVIEW'
+                ? <><b>Noch keinem Monat zugeordnet.</b> «Automatisch zuordnen» nimmt den Monat aus der Mitteilung bzw. dem Zahlungsdatum und trägt die Monatsmiete bei Bedarf nach.</>
+                : <><b>{chf(p.amountCents - assigned)} noch nicht zugeordnet.</b> Automatisch auf die nächsten offenen Monate verteilen oder selbst zuordnen.</>}
+          </p>
+          {p.status !== 'UNCLEAR' && <Button size="sm" icon={<Check className="h-3.5 w-3.5" />} loading={auto.isPending} onClick={() => auto.mutate(undefined)}>Automatisch zuordnen</Button>}
+          <Button size="sm" variant="secondary" icon={<Shuffle className="h-3.5 w-3.5" />} onClick={() => setReassign(true)}>{p.status === 'UNCLEAR' ? 'Mieter wählen' : 'Selbst zuordnen'}</Button>
+        </div>
+      )}
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <Card title="Zahlungsdatensatz">
