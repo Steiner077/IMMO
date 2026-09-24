@@ -176,6 +176,31 @@ export async function propertyRoutes(app: FastifyInstance) {
     return u;
   });
 
+  // Standardpreise je Objektart (z. B. alle Parkplätze CHF 120.–) als Richtmiete setzen
+  app.post('/properties/:id/unit-prices', { preHandler: requirePermission('unit:write', 'finance:read') }, async (req) => {
+    const { id } = parse(idParam, req.params);
+    assertPropertyAccess(req.user, id);
+    const property = await prisma.property.findFirst({ where: { id, organizationId: req.user.organizationId } });
+    if (!property) throw notFound('Immobilie');
+    const body = parse(
+      z.object({
+        prices: z.array(z.object({ type: unitSchema.shape.type.removeDefault(), targetRentCents: z.coerce.number().int().min(0).nullable() })).max(20),
+        overwrite: z.boolean().default(true),
+      }),
+      req.body,
+    );
+    let updated = 0;
+    for (const p of body.prices) {
+      const r = await prisma.unit.updateMany({
+        where: { propertyId: id, type: p.type, archivedAt: null, ...(body.overwrite ? {} : { targetRentCents: null }) },
+        data: { targetRentCents: p.targetRentCents },
+      });
+      updated += r.count;
+    }
+    await auditReq(req, { action: 'unit.prices', entityType: 'Property', entityId: id, summary: `Richtmieten in ${property.name} gesetzt (${updated} Objekte)`, newValues: body });
+    return { updated };
+  });
+
   // Mehrere gleichartige Objekte (z. B. Parkplätze PP1–PP20) in einem Schritt anlegen.
   app.post('/properties/:id/units/bulk', { preHandler: requirePermission('unit:write') }, async (req) => {
     const { id } = parse(idParam, req.params);

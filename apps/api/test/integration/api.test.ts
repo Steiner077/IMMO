@@ -220,6 +220,11 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(again.json()).toEqual({ created: 1, skipped: expect.arrayContaining(['TG4', 'TG5']) });
     const list = (await get(t, '/api/v1/properties')).json();
     expect(list[0].parkingCount).toBeGreaterThanOrEqual(6);
+    const pr = await app.inject({ method: 'POST', url: `/api/v1/properties/${propertyId}/unit-prices`, headers: auth, payload: { overwrite: false, prices: [{ type: 'PARKING', targetRentCents: 13000 }] } });
+    expect(pr.statusCode).toBe(200);
+    const tg = (await get(t, `/api/v1/units?propertyId=${propertyId}`)).json();
+    expect(tg.find((u: { label: string }) => u.label === 'TG6').targetRentCents).toBe(13000);
+    expect(tg.find((u: { label: string }) => u.label === 'TG1').targetRentCents).toBe(12000);
 
     const unit = (await get(t, `/api/v1/units?propertyId=${propertyId}`)).json().find((u: { label: string }) => u.label === 'TG3');
     const tenant = (await app.inject({ method: 'POST', url: '/api/v1/tenants', headers: auth, payload: { firstName: 'Lena', lastName: 'Wyss' } })).json();
