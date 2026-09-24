@@ -155,3 +155,26 @@ describe('Jahresauszug', () => {
     expect(r.allocation[0].period).toBe('2026-10');
   });
 });
+
+describe('Namen mit abweichender Schreibweise', () => {
+  const tenants = [
+    base({ tenantId: 'v', leaseId: 'lv', firstName: 'Valtko', lastName: 'Mesic', monthlyCents: 5000, openCharges: [{ id: 'v3', period: '2025-03', outstandingCents: 5000 }] }),
+    base({ tenantId: 's', leaseId: 'ls', firstName: 'Sylvan', lastName: 'Ernst', monthlyCents: 55000, openCharges: [{ id: 's4', period: '2025-04', outstandingCents: 55000 }] }),
+    base({ tenantId: 'k', leaseId: 'lk', firstName: 'Stephanie', lastName: 'Infangr', monthlyCents: 6000, openCharges: [{ id: 'k4', period: '2025-04', outstandingCents: 6000 }] }),
+  ];
+  it('erkennt Vertauschungen im Vornamen und Doppelnamen', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2025, 2, 31)), amountCents: 5000, payerName: 'Vlatko Mesic-Holjevac', reference: 'Monatliche Parkgebuehr' }, tenants);
+    expect(r.tenantId).toBe('v');
+    expect(r.status).toBe('NEEDS_REVIEW');
+  });
+  it('erkennt fehlenden Buchstaben im Vornamen', () => {
+    expect(matchTransaction({ bookingDate: new Date(Date.UTC(2025, 3, 2)), amountCents: 55000, payerName: 'Sylvain Ernst', reference: 'Miete Wohnung EG April 2025' }, tenants).tenantId).toBe('s');
+  });
+  it('erkennt Tippfehler im Nachnamen bei exaktem Vornamen', () => {
+    expect(matchTransaction({ bookingDate: new Date(Date.UTC(2025, 3, 9)), amountCents: 6000, payerName: 'Infanger Stephanie', reference: 'Miete Parkplatz April 2025' }, tenants).tenantId).toBe('k');
+  });
+  it('verwechselt keine unterschiedlichen Personen', () => {
+    const r = matchTransaction({ bookingDate: new Date(Date.UTC(2025, 3, 9)), amountCents: 6000, payerName: 'Stefan Ernstberger', reference: null }, tenants);
+    expect(r.tenantId).not.toBe('s');
+  });
+});

@@ -109,21 +109,51 @@ export function detectPeriods(text: string, bookingDate: Date): string[] {
   return [...new Set(out)];
 }
 
+/** Tippfehler-Abstand (Damerau-Levenshtein, begrenzt) */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+/** Kommt das Wort (fast) im Text vor? Erlaubt 1 Tippfehler ab 4, 2 ab 8 Buchstaben ("Valtko" ≈ "Vlatko", "Sylvan" ≈ "Sylvain") */
+function fuzzyIn(words: string[], w: string): boolean {
+  const max = w.length >= 8 ? 2 : w.length >= 4 ? 1 : 0;
+  return max > 0 && words.some((x) => x[0] === w[0] && editDistance(x, w, max) <= max);
+}
+
 function nameScore(c: MatchCandidate, payerNorm: string, textNorm: string): { score: number; reason?: string } {
   const hay = ` ${payerNorm} ${textNorm} `;
+  const words = hay.trim().split(/\s+/);
   const first = normalizeText(c.firstName);
   const last = normalizeText(c.lastName);
   const company = normalizeText(c.companyName);
   if (company && company.length >= 3 && hay.includes(` ${company} `)) return { score: 60, reason: `Firmenname "${c.companyName}" erkannt` };
   if (!last) return { score: 0 };
   const lastParts = last.split(' ');
-  const hasLast = lastParts.every((p) => hay.includes(` ${p} `));
-  if (!hasLast) return { score: 0 };
   const firstParts = first ? first.split(' ') : [];
+  const hasLast = lastParts.every((p) => hay.includes(` ${p} `));
+  if (!hasLast) {
+    // Nachname mit Tippfehler, Vorname exakt
+    const lastFuzzy = lastParts.every((p) => hay.includes(` ${p} `) || fuzzyIn(words, p));
+    if (lastFuzzy && firstParts.some((f) => f.length > 1 && hay.includes(` ${f} `)))
+      return { score: 50, reason: `Name ähnlich "${c.firstName} ${c.lastName}" (Schreibweise weicht ab)` };
+    return { score: 0 };
+  }
   if (firstParts.length && firstParts.some((f) => f.length > 1 && hay.includes(` ${f} `)))
     return { score: 60, reason: `Vor- und Nachname "${c.firstName} ${c.lastName}" erkannt` };
   if (firstParts.length && firstParts.some((f) => new RegExp(` ${f[0]} (?:${lastParts.join(' ')}) `).test(hay) || new RegExp(` (?:${lastParts.join(' ')}) ${f[0]} `).test(hay)))
     return { score: 48, reason: `Nachname mit Initiale erkannt (${c.firstName?.[0]}. ${c.lastName})` };
+  if (firstParts.some((f) => fuzzyIn(words, f)))
+    return { score: 55, reason: `Name ähnlich "${c.firstName} ${c.lastName}" (Vorname weicht ab)` };
   return { score: 33, reason: `Nachname "${c.lastName}" erkannt` };
 }
 
