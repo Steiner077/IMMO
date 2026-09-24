@@ -6,13 +6,12 @@ import { PAYMENT_METHODS, PAYMENT_SOURCES, PAYMENT_STATUS } from '@immo/shared';
 import { api, openInline } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useAction } from '@/lib/hooks';
-import { chf, formatDate, formatDateTime, formatPeriod, tenantName } from '@/lib/format';
+import { chf, formatDate, formatDateTime, formatPeriod, isoDate, tenantName, toCents } from '@/lib/format';
 import type { Payment } from '@/lib/types';
-import { Button, Card, ConfidenceBar, EmptyState, Field, Input, KeyValue, Loading, Modal, PageHeader, Pagination, Select } from '@/components/ui';
+import { Button, Card, ConfidenceBar, EmptyState, Field, Input, KeyValue, Loading, Modal, PageHeader, Pagination, Select, Textarea } from '@/components/ui';
 import { PaymentBadge } from '@/components/StatusBadge';
 import { AllocationEditor, type AllocationValue } from '@/components/AllocationEditor';
 import { DocumentsPanel } from '@/components/DocumentsPanel';
-import { PaymentEntry } from '@/components/PaymentEntry';
 
 export function PaymentsPage() {
   const { can } = useAuth();
@@ -54,8 +53,7 @@ export function PaymentsPage() {
                   {data.items.map((p) => {
                     const name = p.tenant ? tenantName(p.tenant) : null;
                     const payerDiffers = p.payerName && name && p.payerName.toLowerCase() !== name.toLowerCase();
-                    // nicht zugeordneter Rest (z. B. Vorauszahlung) – Teilzahlungen zeigt der Status
-                    const credit = p.assignments.length ? p.amountCents - p.assignments.reduce((a, x) => a + x.amountCents, 0) : 0;
+                    const diff = p.expectedCents ? p.amountCents - p.expectedCents : 0;
                     return (
                       <tr key={p.id} className={`clickable ${p.reversedAt ? 'opacity-50' : ''}`} onClick={() => navigate(`/zahlungen/${p.id}`)}>
                         <td className="whitespace-nowrap">
@@ -69,7 +67,7 @@ export function PaymentsPage() {
                         <td className="text-sm text-slate-600">{p.assignments.map((a) => formatPeriod(a.rentCharge.period)).join(', ') || '–'}</td>
                         <td className="num whitespace-nowrap">
                           <p className="font-medium">{chf(p.amountCents)}</p>
-                          {credit > 0 && <p className="text-xs text-violet-700">{chf(credit)} Guthaben</p>}
+                          {diff !== 0 && <p className={`text-xs ${diff < 0 ? 'text-amber-700' : 'text-violet-700'}`}>{diff < 0 ? `${chf(-diff)} zu wenig` : `${chf(diff)} zu viel`}</p>}
                         </td>
                         <td><PaymentBadge status={p.status} /></td>
                       </tr>
@@ -82,11 +80,37 @@ export function PaymentsPage() {
           </>
         )}
       </Card>
-      {open && <PaymentEntry onClose={() => setOpen(false)} />}
+      {open && <NewPaymentModal onClose={() => setOpen(false)} />}
     </>
   );
 }
 
+function NewPaymentModal({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+  const [f, setF] = useState({ bookingDate: isoDate(new Date()), amount: '', method: 'BANK_TRANSFER', reference: '', payerName: '', note: '' });
+  const [alloc, setAlloc] = useState<AllocationValue>({ leaseId: null, allocations: [] });
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const save = useAction(() => api<{ id: string }>('/payments', { body: { ...f, amountCents: toCents(f.amount), leaseId: alloc.leaseId, allocations: alloc.allocations } }), {
+    success: 'Zahlung verbucht',
+    invalidate: [['payments'], ['dashboard'], ['monthly']],
+    onSuccess: (r) => { onClose(); navigate(`/zahlungen/${r.id}`); },
+  });
+  return (
+    <Modal open onClose={onClose} title="Zahlung manuell erfassen" size="lg" footer={<><Button variant="secondary" onClick={onClose}>Abbrechen</Button><Button loading={save.isPending} disabled={!toCents(f.amount)} onClick={() => save.mutate(undefined)}>Verbuchen</Button></>}>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Field label="Zahlungsdatum"><Input type="date" value={f.bookingDate} onChange={set('bookingDate')} /></Field>
+        <Field label="Betrag (CHF)"><Input value={f.amount} onChange={set('amount')} inputMode="decimal" autoFocus /></Field>
+        <Field label="Zahlungsart"><Select value={f.method} onChange={set('method')} options={PAYMENT_METHODS} /></Field>
+        <Field label="Zahler"><Input value={f.payerName} onChange={set('payerName')} /></Field>
+        <Field label="Referenz / Mitteilung" className="sm:col-span-2"><Input value={f.reference} onChange={set('reference')} /></Field>
+      </div>
+      <div className="mt-5 border-t border-slate-100 pt-5">
+        <AllocationEditor amountCents={toCents(f.amount)} value={alloc} onChange={setAlloc} />
+      </div>
+      <Field label="Interne Notiz" className="mt-4"><Textarea rows={2} value={f.note} onChange={set('note')} /></Field>
+    </Modal>
+  );
+}
 
 interface PaymentDetail extends Payment {
   valueDate: string | null; createdAt: string; createdBy: { firstName: string; lastName: string } | null;

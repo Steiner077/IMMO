@@ -7,7 +7,6 @@ import { notFound } from '../lib/errors.js';
 import { propertyIdFilter, requirePermission, scopedPropertyId } from '../auth/context.js';
 import { createPayment, reassignPayment, reversePayment } from '../services/payments.js';
 import { allocatePreferring } from '../import/allocation.js';
-import { addMonths, toPeriod } from '@immo/shared';
 
 const allocationSchema = z.array(z.object({ chargeId: z.string(), amountCents: z.coerce.number().int().positive() }));
 
@@ -84,33 +83,6 @@ export async function paymentRoutes(app: FastifyInstance) {
       include: { user: { select: { firstName: true, lastName: true } } },
     });
     return { ...p, history };
-  });
-
-  /** Für "Zahlung erfassen": alle Mieter mit laufenden Verträgen und ihren offenen Monaten */
-  app.get('/open-items', { preHandler: requirePermission('finance:read') }, async (req) => {
-    const until = addMonths(toPeriod(new Date()), 1);
-    const leases = await prisma.lease.findMany({
-      where: {
-        status: { in: ['ACTIVE', 'TERMINATED', 'ENDED'] },
-        unit: { propertyId: propertyIdFilter(req.user), property: { organizationId: req.user.organizationId } },
-      },
-      include: {
-        tenant: { select: { id: true, firstName: true, lastName: true, companyName: true } },
-        unit: { select: { label: true, type: true, property: { select: { name: true } } } },
-        charges: { where: { status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] }, period: { lte: until } }, orderBy: { period: 'asc' } },
-      },
-    });
-    const byTenant = new Map<string, { tenant: (typeof leases)[number]['tenant']; leases: { id: string; label: string; property: string; monthlyCents: number; active: boolean }[]; open: { chargeId: string; leaseId: string; period: string; label: string; property: string; outstandingCents: number; status: string; dueDate: Date }[] }>();
-    for (const l of leases) {
-      if (l.status === 'ENDED' && !l.charges.length) continue;
-      const e = byTenant.get(l.tenantId) ?? { tenant: l.tenant, leases: [], open: [] };
-      e.leases.push({ id: l.id, label: l.unit.label, property: l.unit.property.name, monthlyCents: l.netRentCents + l.utilitiesCents, active: l.status !== 'ENDED' });
-      for (const c of l.charges) e.open.push({ chargeId: c.id, leaseId: l.id, period: c.period, label: l.unit.label, property: l.unit.property.name, outstandingCents: c.amountCents - c.paidCents, status: c.status, dueDate: c.dueDate });
-      byTenant.set(l.tenantId, e);
-    }
-    return [...byTenant.values()]
-      .map((e) => ({ ...e, open: e.open.sort((a, b) => a.period.localeCompare(b.period) || a.label.localeCompare(b.label, 'de', { numeric: true })), openCents: e.open.reduce((s, o) => s + o.outstandingCents, 0) }))
-      .sort((a, b) => b.openCents - a.openCents || (a.tenant.lastName ?? a.tenant.companyName ?? '').localeCompare(b.tenant.lastName ?? b.tenant.companyName ?? ''));
   });
 
   /** Vorschlag für die Aufteilung (ohne zu speichern) */
