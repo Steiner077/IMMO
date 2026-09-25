@@ -284,6 +284,65 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(all).toHaveProperty('checked');
   });
 
+  it('Import-Zeile: Betrag und Datum manuell korrigieren, wenn die Erkennung sie falsch gelesen hat', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const props = (await get(t, '/api/v1/properties')).json();
+    const bulk = await app.inject({ method: 'POST', url: `/api/v1/properties/${props[0].id}/units/bulk`, headers: auth, payload: { prefix: 'KZ', from: 1, to: 1, type: 'APARTMENT' } });
+    expect(bulk.statusCode).toBe(200);
+    const unit = (await get(t, `/api/v1/units?propertyId=${props[0].id}`)).json().find((u: { label: string }) => u.label === 'KZ1');
+    const tenant = (await app.inject({ method: 'POST', url: '/api/v1/tenants', headers: auth, payload: { firstName: 'Karin', lastName: 'Korrektur' } })).json();
+    const lease = (await app.inject({ method: 'POST', url: '/api/v1/leases', headers: auth, payload: { unitId: unit.id, tenantId: tenant.id, startDate: '2025-06-01', netRentCents: 130000 } })).json();
+
+    // Betrag/Datum bewusst falsch, Zahler unbekannt → keine automatische Zuordnung
+    const up = await app.inject({ method: 'POST', url: '/api/v1/imports/text', headers: auth, payload: { text: "05.09.2026 Gutschrift 999'900.00\nFranz Unleserlich" } });
+    expect(up.statusCode, up.body).toBe(200);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let batch: any;
+    for (let i = 0; i < 50; i++) {
+      batch = (await get(t, `/api/v1/imports/${up.json().id}`)).json();
+      if (batch.status !== 'ANALYZING') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const row = batch.rows[0];
+    expect(row.status).toBe('UNMATCHED');
+    expect(row.amountCents).toBe(99990000);
+
+    // Betrag und Datum korrigieren und dem Mietvertrag zuordnen
+    const fixed = await app.inject({
+      method: 'PATCH', url: `/api/v1/imports/rows/${row.id}`, headers: auth,
+      payload: { amountCents: 130000, bookingDate: '2026-09-05', leaseId: lease.id, confirmed: true },
+    });
+    expect(fixed.statusCode, fixed.body).toBe(200);
+    const fixedRow = fixed.json();
+    expect(fixedRow.amountCents).toBe(130000);
+    expect(fixedRow.bookingDate.slice(0, 10)).toBe('2026-09-05');
+    expect(fixedRow.status).toBe('READY');
+    expect(fixedRow.matchReasons).toContain('Betrag/Datum manuell korrigiert');
+
+    const posted = (await app.inject({ method: 'POST', url: `/api/v1/imports/${batch.id}/post`, headers: auth, payload: {} })).json();
+    expect(posted.failed).toEqual([]);
+    expect(posted.posted).toBe(1);
+    const month = (await get(t, '/api/v1/monthly/2026-09')).json();
+    expect(month.rows.find((x: { tenant: { lastName: string } }) => x.tenant.lastName === 'Korrektur').status).toBe('PAID');
+
+    // Ein zweiter Import mit korrigiertem Betrag/Datum, der auf dieselbe (bereits verbuchte) Zahlung zeigt → Duplikat
+    const up2 = await app.inject({ method: 'POST', url: '/api/v1/imports/text', headers: auth, payload: { text: "01.01.2026 Gutschrift 1.00\nFranz Unleserlich" } });
+    let batch2: any;
+    for (let i = 0; i < 50; i++) {
+      batch2 = (await get(t, `/api/v1/imports/${up2.json().id}`)).json();
+      if (batch2.status !== 'ANALYZING') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const row2 = batch2.rows[0];
+    const dupFix = await app.inject({
+      method: 'PATCH', url: `/api/v1/imports/rows/${row2.id}`, headers: auth,
+      payload: { amountCents: 130000, bookingDate: '2026-09-05' },
+    });
+    expect(dupFix.statusCode, dupFix.body).toBe(200);
+    expect(dupFix.json().status).toBe('DUPLICATE');
+  });
+
   it('Stornierte Zahlung setzt den Monat wieder auf offen', async () => {
     const t = await login('verwaltung@immo.local');
     const auth = { authorization: `Bearer ${t}` };

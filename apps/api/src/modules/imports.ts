@@ -108,6 +108,9 @@ export async function importRoutes(app: FastifyInstance) {
         allocation: z.array(z.object({ chargeId: z.string(), amountCents: z.coerce.number().int().positive() })).optional(),
         confirmed: z.boolean().optional(),
         ignore: z.boolean().optional(),
+        // Manuelle Korrektur, wenn Betrag oder Datum falsch gelesen wurden
+        amountCents: z.coerce.number().int().positive().optional(),
+        bookingDate: z.coerce.date().optional(),
       }),
       req.body,
     );

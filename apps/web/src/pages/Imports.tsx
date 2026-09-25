@@ -5,9 +5,9 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useAction } from '@/lib/hooks';
-import { chf, formatDate, formatDateTime, formatPeriod, tenantName } from '@/lib/format';
+import { chf, formatDate, formatDateTime, formatPeriod, fromCents, isoDate, tenantName, toCents } from '@/lib/format';
 import type { TenantRef } from '@/lib/types';
-import { Badge, Button, Card, EmptyState, Loading, Modal, PageHeader, StatCard, Tabs, Textarea, useToast } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Field, Input, Loading, Modal, PageHeader, StatCard, Tabs, Textarea, useToast } from '@/components/ui';
 import { ImportBadge } from '@/components/StatusBadge';
 import { AllocationEditor, type AllocationValue } from '@/components/AllocationEditor';
 
@@ -356,17 +356,44 @@ export function ImportDetailPage() {
 
 function RowEditModal({ row, onClose, invalidateKey }: { row: Row; onClose: () => void; invalidateKey: unknown[] }) {
   const [alloc, setAlloc] = useState<AllocationValue>({ leaseId: row.suggestedLeaseId, allocations: [] });
+  // Betrag/Datum korrigierbar, falls die Erkennung sie falsch gelesen hat
+  const [fixValues, setFixValues] = useState(false);
+  const [amount, setAmount] = useState(fromCents(row.amountCents));
+  const [date, setDate] = useState(isoDate(row.bookingDate));
+  const amountChanged = fixValues && toCents(amount) !== row.amountCents && toCents(amount) > 0;
+  const dateChanged = fixValues && date !== isoDate(row.bookingDate) && !!date;
   const save = useAction(
-    () => api(`/imports/rows/${row.id}`, { method: 'PATCH', body: alloc.leaseId ? { leaseId: alloc.leaseId, allocation: alloc.allocations, confirmed: true } : { leaseId: null } }),
+    () =>
+      api(`/imports/rows/${row.id}`, {
+        method: 'PATCH',
+        body: {
+          ...(amountChanged ? { amountCents: toCents(amount) } : {}),
+          ...(dateChanged ? { bookingDate: date } : {}),
+          ...(alloc.leaseId ? { leaseId: alloc.leaseId, allocation: alloc.allocations, confirmed: true } : { leaseId: null }),
+        },
+      }),
     { success: 'Zuordnung korrigiert und bestätigt', invalidate: [invalidateKey], onSuccess: onClose },
   );
   return (
     <Modal open onClose={onClose} title="Zuordnung korrigieren" size="lg" footer={<><Button variant="secondary" onClick={onClose}>Abbrechen</Button><Button loading={save.isPending} onClick={() => save.mutate(undefined)}>{alloc.leaseId ? 'Übernehmen & bestätigen' : 'Zuordnung entfernen'}</Button></>}>
       <div className="mb-4 rounded-lg bg-slate-50 p-3 text-sm">
-        <p><strong>{row.payerName}</strong> · {formatDate(row.bookingDate)} · <strong>{chf(row.amountCents)}</strong></p>
-        <p className="text-xs text-slate-500">{row.reference}</p>
+        {!fixValues ? (
+          <>
+            <p><strong>{row.payerName}</strong> · {formatDate(row.bookingDate)} · <strong>{chf(row.amountCents)}</strong></p>
+            <p className="text-xs text-slate-500">{row.reference}</p>
+            <button className="mt-2 text-xs font-medium text-brand-700 hover:underline" onClick={() => setFixValues(true)}>
+              Betrag oder Datum falsch erkannt? Hier korrigieren.
+            </button>
+          </>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Betrag (CHF)"><Input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" /></Field>
+            <Field label="Datum"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+            <p className="col-span-2 text-xs text-slate-500">{row.payerName} · {row.reference}</p>
+          </div>
+        )}
       </div>
-      <AllocationEditor amountCents={row.amountCents} value={alloc} onChange={setAlloc} initialLeaseId={row.suggestedLeaseId} initialPeriod={row.suggestedPeriod} />
+      <AllocationEditor amountCents={amountChanged ? toCents(amount) : row.amountCents} value={alloc} onChange={setAlloc} initialLeaseId={row.suggestedLeaseId} initialPeriod={row.suggestedPeriod} />
       <p className="mt-3 text-xs text-slate-500">Die Korrektur wird gespeichert und für künftige Zahlungen von „{row.payerName}“ berücksichtigt (Lernlogik).</p>
     </Modal>
   );

@@ -326,6 +326,9 @@ export interface RowUpdate {
   allocation?: { chargeId: string; amountCents: number }[];
   confirmed?: boolean;
   ignore?: boolean;
+  /** Betrag und Datum manuell korrigieren, falls die Erkennung sie falsch gelesen hat */
+  amountCents?: number;
+  bookingDate?: Date;
 }
 
 /** Manuelle Korrektur einer Importzeile vor dem Verbuchen. */
@@ -342,8 +345,26 @@ export async function updateImportRow(rowId: string, input: RowUpdate, user: Aut
     data.status = input.ignore ? 'IGNORED' : row.suggestedLeaseId ? 'NEEDS_REVIEW' : 'UNMATCHED';
     data.confirmed = false;
   }
+
+  // Betrag/Datum wurden von der Erkennung falsch gelesen – manuell korrigieren
+  const effectiveAmount = input.amountCents ?? row.amountCents;
+  const effectiveDate = input.bookingDate ?? row.bookingDate;
+  const amountOrDateChanged = input.amountCents !== undefined || input.bookingDate !== undefined;
+  if (amountOrDateChanged) {
+    if (effectiveAmount <= 0) throw badRequest('Der Betrag muss grösser als 0 sein.');
+    data.amountCents = effectiveAmount;
+    data.bookingDate = effectiveDate;
+    const fingerprint = paymentFingerprint({ bookingDate: effectiveDate, amountCents: effectiveAmount, payerName: row.payerName, reference: row.reference });
+    data.fingerprint = fingerprint;
+    const dup = await prisma.payment.findFirst({ where: { organizationId: user.organizationId, fingerprint, reversedAt: null } });
+    if (dup) {
+      Object.assign(data, { status: 'DUPLICATE', confirmed: false, suggestedLeaseId: null, suggestedTenantId: null, suggestedPeriod: null, allocation: [], matchReasons: [`Diese Zahlung wurde bereits verbucht (#${dup.number})`] });
+    }
+  }
+
   const leaseChanged = input.leaseId !== undefined && input.leaseId !== row.suggestedLeaseId;
-  if (input.leaseId !== undefined || input.period !== undefined || input.allocation) {
+  const dupFound = (data.status as unknown) === 'DUPLICATE';
+  if (!dupFound && (input.leaseId !== undefined || input.period !== undefined || input.allocation || amountOrDateChanged)) {
     const leaseId = input.leaseId !== undefined ? input.leaseId : row.suggestedLeaseId;
     if (!leaseId) {
       Object.assign(data, { suggestedLeaseId: null, suggestedTenantId: null, suggestedPeriod: null, allocation: [], status: 'UNMATCHED', confirmed: false });
@@ -367,7 +388,7 @@ export async function updateImportRow(rowId: string, input: RowUpdate, user: Aut
       let allocation: AllocationLine[];
       if (input.allocation) {
         const total = input.allocation.reduce((s, a) => s + a.amountCents, 0);
-        if (total > row.amountCents) throw badRequest('Die Aufteilung übersteigt den Zahlungsbetrag.');
+        if (total > effectiveAmount) throw badRequest('Die Aufteilung übersteigt den Zahlungsbetrag.');
         allocation = input.allocation.map((a) => {
           const c = open.find((o) => o.id === a.chargeId);
           if (!c) throw badRequest('Monat ist nicht offen oder gehört nicht zum Vertrag.');
@@ -376,7 +397,7 @@ export async function updateImportRow(rowId: string, input: RowUpdate, user: Aut
         });
       } else {
         const ownIds = new Set((await prisma.rentCharge.findMany({ where: { leaseId, status: { in: ['OPEN', 'PARTIAL', 'OVERDUE'] } }, select: { id: true } })).map((c) => c.id));
-        allocation = allocatePreferring(row.amountCents, open.filter((o) => ownIds.has(o.id)), open.filter((o) => !ownIds.has(o.id)), period).lines;
+        allocation = allocatePreferring(effectiveAmount, open.filter((o) => ownIds.has(o.id)), open.filter((o) => !ownIds.has(o.id)), period).lines;
       }
       Object.assign(data, {
         suggestedLeaseId: lease.id,
@@ -386,7 +407,7 @@ export async function updateImportRow(rowId: string, input: RowUpdate, user: Aut
         status: 'NEEDS_REVIEW',
         corrected: true,
         confidence: 100,
-        matchReasons: ['Manuell zugeordnet'],
+        matchReasons: amountOrDateChanged ? ['Betrag/Datum manuell korrigiert', 'Manuell zugeordnet'] : ['Manuell zugeordnet'],
       });
     }
   }
