@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { EXPENSE_CATEGORIES, formatMoney, periodRange, toPeriod } from '@immo/shared';
+import { EXPENSE_CATEGORIES, addMonths, formatMoney, periodRange, toPeriod } from '@immo/shared';
 import { prisma } from '../lib/prisma.js';
 import { idParam, optStr, parse } from '../lib/http.js';
 import { notFound } from '../lib/errors.js';
@@ -24,12 +24,17 @@ const expenseSchema = z.object({
 export async function financeRoutes(app: FastifyInstance) {
   // ───── Ausgaben ─────
   app.get('/expenses', { preHandler: requirePermission('expense:read') }, async (req) => {
-    const q = parse(z.object({ propertyId: z.string().optional(), year: z.coerce.number().optional(), category: z.string().optional() }), req.query);
+    const q = parse(z.object({ propertyId: z.string().optional(), year: z.coerce.number().optional(), period: z.string().regex(/^\d{4}-\d{2}$/).optional(), category: z.string().optional() }), req.query);
+    const periodRangeFilter = q.period
+      ? { gte: new Date(`${q.period}-01T00:00:00Z`), lt: new Date(`${addMonths(q.period, 1)}-01T00:00:00Z`) }
+      : q.year
+        ? { gte: new Date(Date.UTC(q.year, 0, 1)), lt: new Date(Date.UTC(q.year + 1, 0, 1)) }
+        : undefined;
     return prisma.expense.findMany({
       where: {
         organizationId: req.user.organizationId,
         propertyId: scopedPropertyId(req.user, q.propertyId),
-        ...(q.year ? { date: { gte: new Date(Date.UTC(q.year, 0, 1)), lt: new Date(Date.UTC(q.year + 1, 0, 1)) } } : {}),
+        ...(periodRangeFilter ? { date: periodRangeFilter } : {}),
         ...(q.category ? { category: q.category as never } : {}),
       },
       include: {

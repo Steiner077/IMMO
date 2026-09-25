@@ -1,17 +1,19 @@
-import { Building2, Car, KeyRound, MapPin, Pencil, Plus, Tags } from 'lucide-react';
+import { Building2, Car, ChevronLeft, ChevronRight, KeyRound, MapPin, Pencil, Plus, Receipt, Tags, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { PROPERTY_TYPES, UNIT_TYPES } from '@immo/shared';
+import { addMonths, EXPENSE_CATEGORIES, PROPERTY_TYPES, UNIT_TYPES } from '@immo/shared';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useAction } from '@/lib/hooks';
-import { chf, fromCents, tenantName, toCents } from '@/lib/format';
+import { chf, currentPeriod, formatDate, formatPeriod, fromCents, tenantName, toCents } from '@/lib/format';
 import type { Property, TenantRef } from '@/lib/types';
 import { Badge, Button, Card, EmptyState, Field, Input, KeyValue, Loading, Modal, PageHeader, Select, StatCard, Tabs, Textarea } from '@/components/ui';
 import { DocumentsPanel } from '@/components/DocumentsPanel';
 import { DamageList } from './Damages';
 import { RentOutForm } from '@/components/RentOutForm';
+import { ExpenseForm } from '@/components/ExpenseForm';
+import { ChargeBadge } from '@/components/StatusBadge';
 
 export function PropertiesPage() {
   const { can } = useAuth();
@@ -202,6 +204,7 @@ export function PropertyDetailPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [pricesOpen, setPricesOpen] = useState(false);
   const [rentOpen, setRentOpen] = useState(false);
+  const [period, setPeriod] = useState(currentPeriod());
   const navigate = useNavigate();
   const { data: p, isLoading } = useQuery({ queryKey: ['property', id], queryFn: () => api<PropertyDetail>(`/properties/${id}`) });
   if (isLoading || !p) return <Loading />;
@@ -226,7 +229,17 @@ export function PropertyDetailPage() {
         {fin && <StatCard label="Soll-Mietertrag / Monat" value={chf(monthly)} />}
         {fin && <StatCard label="Soll-Mietertrag / Jahr" value={chf(monthly * 12)} />}
       </div>
-      <Tabs value={tab} onChange={setTab} tabs={[{ key: 'units', label: 'Mietobjekte', count: p.units.length }, { key: 'damages', label: 'Mängel' }, { key: 'docs', label: 'Dokumente' }, { key: 'info', label: 'Stammdaten' }]} />
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { key: 'units', label: 'Mietobjekte', count: p.units.length },
+          ...(fin ? [{ key: 'month', label: 'Monat' }] : []),
+          { key: 'damages', label: 'Mängel' },
+          { key: 'docs', label: 'Dokumente' },
+          { key: 'info', label: 'Stammdaten' },
+        ]}
+      />
       {tab === 'units' && (
         <Card title="Wohnungen und Mietobjekte" actions={
           <div className="flex flex-wrap gap-2">
@@ -261,6 +274,7 @@ export function PropertyDetailPage() {
           {!p.units.length && <EmptyState title="Noch keine Mietobjekte" />}
         </Card>
       )}
+      {tab === 'month' && fin && <PropertyMonthTab propertyId={p.id} propertyName={p.name} period={period} onPeriod={setPeriod} />}
       {tab === 'damages' && <DamageList filter={{ propertyId: p.id }} />}
       {tab === 'docs' && <Card title="Dokumentenablage der Immobilie" bodyClassName="p-0"><DocumentsPanel filter={{ propertyId: p.id }} /></Card>}
       {tab === 'info' && (
@@ -279,6 +293,101 @@ export function PropertyDetailPage() {
       {bulkOpen && <BulkUnitForm propertyId={p.id} onClose={() => setBulkOpen(false)} />}
       {pricesOpen && <PriceForm propertyId={p.id} units={units} onClose={() => setPricesOpen(false)} />}
       {rentOpen && <RentOutForm units={units.filter((u) => !u.leases.length)} onClose={() => setRentOpen(false)} />}
+    </>
+  );
+}
+
+interface MonthRow { chargeId: string; tenant: TenantRef & { id: string }; unit: { label: string }; amountCents: number; paidCents: number; openCents: number; status: string }
+interface MonthData { summary: { dueCents: number; paidCents: number; openCents: number }; rows: MonthRow[] }
+interface MonthExpense { id: string; date: string; category: string; description: string; amountCents: number; invoiceNumber: string | null; unit: { label: string } | null; serviceProvider: { name: string } | null }
+
+/**
+ * Alles zum laufenden Monat dieser Immobilie an einem Ort: Mieteingänge,
+ * offene Posten und Ausgaben – inklusive direkter Erfassung einer Ausgabe.
+ */
+function PropertyMonthTab({ propertyId, propertyName, period, onPeriod }: { propertyId: string; propertyName: string; period: string; onPeriod: (p: string) => void }) {
+  const { can } = useAuth();
+  const navigate = useNavigate();
+  const [expenseOpen, setExpenseOpen] = useState(false);
+  const { data: month, isLoading: monthLoading } = useQuery({ queryKey: ['monthly', period, propertyId], queryFn: () => api<MonthData>(`/monthly/${period}?propertyId=${propertyId}`) });
+  const { data: expenses, isLoading: expensesLoading } = useQuery({ queryKey: ['expenses', propertyId, period], queryFn: () => api<MonthExpense[]>(`/expenses?propertyId=${propertyId}&period=${period}`) });
+  const del = useAction((id: string) => api(`/expenses/${id}`, { method: 'DELETE' }), { success: 'Ausgabe gelöscht', invalidate: [['expenses'], ['finance'], ['dashboard']] });
+
+  const expenseCents = (expenses ?? []).reduce((s, e) => s + e.amountCents, 0);
+  const resultCents = (month?.summary.paidCents ?? 0) - expenseCents;
+  // Datum für eine neue Ausgabe: heute, falls der laufende Monat gewählt ist – sonst der 1. des gewählten Monats
+  const expenseDate = period === currentPeriod() ? undefined : `${period}-01`;
+
+  return (
+    <>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center rounded-lg border border-slate-300 bg-white shadow-xs">
+          <button className="px-2.5 py-2 text-slate-500 hover:text-slate-900" onClick={() => onPeriod(addMonths(period, -1))} aria-label="Vorheriger Monat"><ChevronLeft className="h-4 w-4" /></button>
+          <input type="month" value={period} onChange={(e) => e.target.value && onPeriod(e.target.value)} className="border-x border-slate-200 px-2 py-1.5 text-sm font-medium" />
+          <button className="px-2.5 py-2 text-slate-500 hover:text-slate-900" onClick={() => onPeriod(addMonths(period, 1))} aria-label="Nächster Monat"><ChevronRight className="h-4 w-4" /></button>
+        </div>
+        {can('expense:write') && <Button size="sm" icon={<Receipt className="h-4 w-4" />} onClick={() => setExpenseOpen(true)}>Ausgabe erfassen</Button>}
+      </div>
+
+      {monthLoading || expensesLoading || !month || !expenses ? <Loading /> : (
+        <>
+          <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <StatCard label={`Soll-Miete ${formatPeriod(period)}`} value={chf(month.summary.dueCents)} />
+            <StatCard label="Erhalten" value={chf(month.summary.paidCents)} tone="good" />
+            <StatCard label="Offen" value={chf(month.summary.openCents)} tone={month.summary.openCents ? 'warn' : 'default'} />
+            <StatCard label="Ausgaben" value={chf(expenseCents)} />
+            <StatCard label="Ergebnis (Kasse)" value={chf(resultCents)} tone={resultCents < 0 ? 'bad' : 'good'} sub="Erhalten − Ausgaben" />
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Card title="Mieteingänge" bodyClassName="p-0">
+              {!month.rows.length ? <EmptyState title="Keine Mietobjekte mit Sollstellung" /> : (
+                <table className="table-base">
+                  <thead><tr><th>Mieter</th><th>Objekt</th><th className="num">Soll</th><th className="num">Offen</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {month.rows.map((r) => (
+                      <tr key={r.chargeId} className="clickable" onClick={() => navigate(`/mieter/${r.tenant.id}`)}>
+                        <td className="font-medium text-slate-900">{tenantName(r.tenant)}</td>
+                        <td className="text-slate-600">{r.unit.label}</td>
+                        <td className="num">{chf(r.amountCents)}</td>
+                        <td className={`num ${r.openCents ? 'font-medium text-red-700' : 'text-slate-400'}`}>{r.openCents ? chf(r.openCents) : '–'}</td>
+                        <td><ChargeBadge status={r.status} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <p className="border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+                Für den Zahlungsverlauf und um Zahlungen zuzuordnen: <Link to={`/monatsabschluss/${period}`} className="font-medium text-brand-700 hover:underline">zum Monatsabschluss</Link>.
+              </p>
+            </Card>
+
+            <Card title="Ausgaben" bodyClassName="p-0">
+              {!expenses.length ? <EmptyState title="Keine Ausgaben in diesem Monat" text="Rechnungen und Kosten hier direkt erfassen." /> : (
+                <table className="table-base">
+                  <thead><tr><th>Datum</th><th>Kategorie</th><th>Beschreibung</th><th className="num">Betrag</th><th /></tr></thead>
+                  <tbody>
+                    {expenses.map((e) => (
+                      <tr key={e.id}>
+                        <td className="whitespace-nowrap">{formatDate(e.date)}</td>
+                        <td>{EXPENSE_CATEGORIES[e.category as keyof typeof EXPENSE_CATEGORIES]}</td>
+                        <td>
+                          {e.description}
+                          <p className="text-xs text-slate-500">{[e.unit?.label, e.serviceProvider?.name, e.invoiceNumber && `Rg. ${e.invoiceNumber}`].filter(Boolean).join(' · ')}</p>
+                        </td>
+                        <td className="num font-medium whitespace-nowrap">{chf(e.amountCents)}</td>
+                        <td>{can('expense:write') && <button className="rounded p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-600" onClick={() => confirm('Ausgabe löschen?') && del.mutate(e.id)}><Trash2 className="h-4 w-4" /></button>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Card>
+          </div>
+        </>
+      )}
+
+      {expenseOpen && <ExpenseForm initialPropertyId={propertyId} propertyName={propertyName} initialDate={expenseDate} lockProperty onClose={() => setExpenseOpen(false)} />}
     </>
   );
 }

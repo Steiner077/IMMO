@@ -392,3 +392,30 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(month.rows.find((x: { tenant: { lastName: string } }) => x.tenant.lastName === 'Müller').status).not.toBe('PAID');
   });
 });
+
+describe('Ausgaben je Monat (Immobilien-Tab "Monat")', () => {
+  it('lässt Ausgaben nach Monat filtern, damit sie zur Sicht der jeweiligen Immobilie passen', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const props = (await get(t, '/api/v1/properties')).json();
+    const propertyId = props[0].id;
+    const created = await app.inject({
+      method: 'POST', url: '/api/v1/expenses', headers: auth,
+      payload: { propertyId, category: 'REPAIR', date: '2026-09-12', amountCents: 45000, description: 'Testreparatur (Monatsfilter)' },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const id = created.json().id;
+
+    const inMonth = (await get(t, `/api/v1/expenses?propertyId=${propertyId}&period=2026-09`)).json();
+    expect(inMonth.some((e: { id: string }) => e.id === id)).toBe(true);
+
+    const otherMonth = (await get(t, `/api/v1/expenses?propertyId=${propertyId}&period=2026-08`)).json();
+    expect(otherMonth.some((e: { id: string }) => e.id === id)).toBe(false);
+
+    // Jahresfilter bleibt zusätzlich nutzbar (Finanzen-Seite)
+    const byYear = (await get(t, `/api/v1/expenses?propertyId=${propertyId}&year=2026`)).json();
+    expect(byYear.some((e: { id: string }) => e.id === id)).toBe(true);
+
+    await app.inject({ method: 'DELETE', url: `/api/v1/expenses/${id}`, headers: auth });
+  });
+});
