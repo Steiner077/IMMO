@@ -343,6 +343,44 @@ describe('Zahlungsimport (PDF) End-to-End', () => {
     expect(dupFix.json().status).toBe('DUPLICATE');
   });
 
+  it('«Selbst zuordnen»: einen Monat manuell hinzufügen, für den noch keine Sollstellung besteht', async () => {
+    const t = await login('verwaltung@immo.local');
+    const auth = { authorization: `Bearer ${t}` };
+    const props = (await get(t, '/api/v1/properties')).json();
+    const bulk = await app.inject({ method: 'POST', url: `/api/v1/properties/${props[0].id}/units/bulk`, headers: auth, payload: { prefix: 'MZ', from: 1, to: 1, type: 'APARTMENT' } });
+    expect(bulk.statusCode).toBe(200);
+    const unit = (await get(t, `/api/v1/units?propertyId=${props[0].id}`)).json().find((u: { label: string }) => u.label === 'MZ1');
+    const tenant = (await app.inject({ method: 'POST', url: '/api/v1/tenants', headers: auth, payload: { firstName: 'Peter', lastName: 'Manuell' } })).json();
+    const lease = (await app.inject({ method: 'POST', url: '/api/v1/leases', headers: auth, payload: { unitId: unit.id, tenantId: tenant.id, startDate: '2025-01-01', endDate: '2026-12-31', netRentCents: 90000 } })).json();
+
+    // Monat weit in der Vergangenheit (vor dem bisherigen Abrechnungsbeginn) – wie bei einem Jahresauszug
+    const past = await app.inject({ method: 'POST', url: '/api/v1/payments/ensure-open-charge', headers: auth, payload: { leaseId: lease.id, period: '2025-02' } });
+    expect(past.statusCode, past.body).toBe(200);
+    expect(past.json()).toMatchObject({ period: '2025-02', outstandingCents: 90000, label: 'MZ1' });
+    // ein zweites Mal aufrufen darf nicht doppelt anlegen
+    const again = await app.inject({ method: 'POST', url: '/api/v1/payments/ensure-open-charge', headers: auth, payload: { leaseId: lease.id, period: '2025-02' } });
+    expect(again.json().id).toBe(past.json().id);
+    const feb = (await get(t, '/api/v1/monthly/2025-02')).json();
+    expect(feb.rows.filter((r: { tenant: { lastName: string } }) => r.tenant.lastName === 'Manuell')).toHaveLength(1);
+
+    // Monat in der Zukunft
+    const future = await app.inject({ method: 'POST', url: '/api/v1/payments/ensure-open-charge', headers: auth, payload: { leaseId: lease.id, period: '2026-11' } });
+    expect(future.statusCode, future.body).toBe(200);
+    expect(future.json().period).toBe('2026-11');
+
+    // Nie vor Mietbeginn
+    const beforeStart = await app.inject({ method: 'POST', url: '/api/v1/payments/ensure-open-charge', headers: auth, payload: { leaseId: lease.id, period: '2024-12' } });
+    expect(beforeStart.statusCode).toBe(400);
+
+    // Nie nach Vertragsende
+    const afterEnd = await app.inject({ method: 'POST', url: '/api/v1/payments/ensure-open-charge', headers: auth, payload: { leaseId: lease.id, period: '2027-01' } });
+    expect(afterEnd.statusCode).toBe(400);
+
+    // Der so hinzugefügte Monat lässt sich normal einer Zahlung zuordnen
+    const pay = (await app.inject({ method: 'POST', url: '/api/v1/payments', headers: auth, payload: { leaseId: lease.id, bookingDate: '2025-02-10', amountCents: 90000, allocations: [{ chargeId: past.json().id, amountCents: 90000 }] } })).json();
+    expect(pay.status).toBe('ASSIGNED');
+  });
+
   it('Stornierte Zahlung setzt den Monat wieder auf offen', async () => {
     const t = await login('verwaltung@immo.local');
     const auth = { authorization: `Bearer ${t}` };

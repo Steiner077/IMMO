@@ -3,8 +3,8 @@ import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { idParam, optStr, pagination, parse } from '../lib/http.js';
-import { badRequest, conflict, notFound } from '../lib/errors.js';
-import { assertPropertyAccess, propertyIdFilter, requirePermission, scopedPropertyId } from '../auth/context.js';
+import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
+import { assertPropertyAccess, can, propertyIdFilter, requirePermission, scopedPropertyId } from '../auth/context.js';
 import { createPayment, reassignPayment, reversePayment } from '../services/payments.js';
 import { allocatePreferring } from '../import/allocation.js';
 import { detectPeriods } from '../import/matching.js';
@@ -137,6 +137,41 @@ export async function paymentRoutes(app: FastifyInstance) {
       include: { user: { select: { firstName: true, lastName: true } } },
     });
     return { ...p, history };
+  });
+
+  /**
+   * "Selbst zuordnen": einen bestimmten Monat verfügbar machen, auch wenn dafür noch keine
+   * Sollstellung besteht (künftiger Monat, oder ein Monat vor dem bisherigen Abrechnungsbeginn –
+   * z. B. bei einem Jahresauszug). Nie vor Mietbeginn und nie nach Vertragsende.
+   */
+  app.post('/ensure-open-charge', {
+    preHandler: async (req) => {
+      if (!can(req.user, 'finance:read') || !(can(req.user, 'payment:import') || can(req.user, 'finance:write'))) throw forbidden();
+    },
+  }, async (req) => {
+    const body = parse(z.object({ leaseId: z.string(), period: z.string().regex(/^\d{4}-\d{2}$/) }), req.body);
+    const lease = await prisma.lease.findFirst({ where: { id: body.leaseId, unit: { property: { organizationId: req.user.organizationId } } }, include: { unit: { select: { label: true, propertyId: true } } } });
+    if (!lease) throw notFound('Mietvertrag');
+    assertPropertyAccess(req.user, lease.unit.propertyId);
+    if (body.period < toPeriod(lease.startDate)) throw badRequest('Dieser Monat liegt vor dem Mietbeginn.');
+    if (lease.endDate && body.period > toPeriod(lease.endDate)) throw badRequest('Dieser Monat liegt nach dem Vertragsende.');
+    const farFuture = addMonths(toPeriod(new Date()), 24);
+    if (body.period > farFuture) throw badRequest('Nicht mehr als 24 Monate im Voraus möglich.');
+
+    const effectiveStartPeriod = toPeriod(lease.chargesFrom && lease.chargesFrom > lease.startDate ? lease.chargesFrom : lease.startDate);
+    let updated = lease;
+    if (body.period < effectiveStartPeriod) {
+      const chargesFrom = new Date(`${body.period}-01T00:00:00Z`);
+      await prisma.lease.update({ where: { id: lease.id }, data: { chargesFrom } });
+      await auditReq(req, { action: 'lease.charges_backfill', entityType: 'Lease', entityId: lease.id, summary: `Sollstellung ${lease.unit.label} für ${body.period} manuell nachgetragen`, oldValues: { chargesFrom: lease.chargesFrom }, newValues: { chargesFrom } });
+      updated = { ...lease, chargesFrom };
+    }
+    const horizon = addMonths(toPeriod(new Date()), 1);
+    await ensureChargesForLease(prisma, updated, body.period > horizon ? body.period : horizon);
+
+    const charge = await prisma.rentCharge.findFirst({ where: { leaseId: lease.id, period: body.period } });
+    if (!charge) throw badRequest('Für diesen Monat besteht kein Mietverhältnis.');
+    return { id: charge.id, period: charge.period, outstandingCents: charge.amountCents - charge.paidCents, label: lease.unit.label };
   });
 
   /** Vorschlag für die Aufteilung (ohne zu speichern) */
